@@ -97,9 +97,18 @@ export function IndexPanel({ series, latest, latestAt, entries, onPlaceOrder }: 
             ))}
           </div>
           <IndexChart points={points} latest={latestBySector.get(sector) ?? null} latestAt={latestAt} />
+          {/*
+            Describes the CURRENT method. This copy previously said "equal-weight vs each
+            commodity's first-seen baseline", which was the pre-chain-linking calculation —
+            it survived the rewrite and went on explaining a formula the code no longer used.
+          */}
           <p className="mt-2 text-[11px] leading-relaxed text-ink-faint">
-            Base-1000, equal-weight vs each commodity&apos;s first-seen baseline, tracking the KCX
-            mark — so player fills move it, not just NPC prices.{zoneLabel && ` Times shown in ${zoneLabel}.`}
+            Index level, not a price. Base 1000 at the start of tracking; each step moves by the
+            equal-weighted average change of the sector&apos;s{" "}
+            {latestBySector.get(sector)?.constituents ?? "—"} constituents, compounded. Tracks the
+            KCX mark, so player fills move it and not just NPC prices. A commodity that starts
+            trading later joins without moving the level.
+            {zoneLabel && ` Times shown in ${zoneLabel}.`}
           </p>
         </div>
       ) : (
