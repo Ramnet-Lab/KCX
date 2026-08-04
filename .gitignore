@@ -21,3 +21,9 @@ Thumbs.db
 # API route source at apps/web/src/app/api/uploads/, which must be committed.
 /uploads/
 /apps/web/uploads/
+
+# Database dumps taken before migrations on the deploy box. These contain live user
+# data — handles, session rows, password hashes — and must never reach the repo.
+/backups/
+*.sql.gz
+
