@@ -90,7 +90,9 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           error: `This order costs ${cost.toLocaleString()} aUEC but you have ${capacity.available.toLocaleString()} available${
-            capacity.committed > 0 ? ` (${capacity.committed.toLocaleString()} is committed to other buy orders)` : ""
+            capacity.committed > 0
+              ? ` (${capacity.committed.toLocaleString()} is committed to open buy orders, escrows and contract payouts)`
+              : ""
           }.`,
           capacity,
         },

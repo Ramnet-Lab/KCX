@@ -59,9 +59,13 @@ services:
       DATABASE_URL: postgres://kcx:kcx@db:5432/kcx
       NEXT_PUBLIC_WS_URL: http://localhost:4000
       IP_HASH_SALT: dev-salt
+      UPLOAD_DIR: /app/uploads
       ALLOW_DEV_LOGIN: "true"
     ports:
       - "3000:3000"
+    volumes:
+      - uploads:/app/uploads
 
 volumes:
+  uploads:
   dev-db:

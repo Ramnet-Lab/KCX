@@ -16,3 +16,8 @@ tools/
 # misc
 .DS_Store
 Thumbs.db
+# Uploaded contract images. Anchored to the two places they actually land (repo root, and
+# apps/web when UPLOAD_DIR is unset in dev) — an unanchored `uploads/` also swallows the
+# API route source at apps/web/src/app/api/uploads/, which must be committed.
+/uploads/
+/apps/web/uploads/

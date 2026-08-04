@@ -5,11 +5,16 @@ import { orders, userHoldings, users } from "../schema/orders";
 /**
  * Collateral accounting — KCX lists only what traders actually have.
  *
- * There is no margin, no shorting, and no options. A trader's obligations come from TWO
- * places and both must be counted together, or the same cargo/aUEC can back two promises:
+ * There is no margin, no shorting, and no options. A trader's obligations come from THREE
+ * places and all must be counted together, or the same cargo/aUEC can back two promises:
  *
  *   1. Resting orders they posted     → the UNRESERVED remainder (remaining − reserved)
  *   2. Open escrow contracts          → whichever side of the trade they owe
+ *   3. Service contracts they issued  → the payout they owe on completion (aUEC only)
+ *
+ * (3) lives here rather than at the call site on purpose: when it was summed by one caller,
+ * every other consumer — the portfolio panel, order placement, balance edits — silently
+ * undercounted, and the same aUEC could back both a contract payout and a buy order.
  *
  * The reserved slice of an order is deliberately excluded from (1) because it is already
  * counted as an escrow in (2) — otherwise claiming your own order's quantity double-counts.
@@ -22,7 +27,10 @@ import { orders, userHoldings, users } from "../schema/orders";
 export type SellCapacity = { held: number; committed: number; available: number };
 export type BuyCapacity = { balance: number; committed: number; available: number };
 
-/** aUEC this trader has promised elsewhere: unreserved buy orders + escrows they must pay. */
+/**
+ * aUEC this trader has promised elsewhere: unreserved buy orders + escrows they must pay
+ * + payouts on service contracts they issued.
+ */
 const COMMITTED_AUEC = (userId: string) => sql`(
   SELECT
     coalesce((
@@ -38,6 +46,12 @@ const COMMITTED_AUEC = (userId: string) => sql`(
       WHERE t.status = 'escrow'
         AND ((t.claimer_id = ${userId} AND t.side = 'sell')
           OR (t.owner_id   = ${userId} AND t.side = 'buy'))
+    ), 0)
+    +
+    coalesce((
+      SELECT sum(sc.payout)
+      FROM service_contracts sc
+      WHERE sc.issuer_id = ${userId} AND sc.status IN ('open','in_progress')
     ), 0)
 )`;
 

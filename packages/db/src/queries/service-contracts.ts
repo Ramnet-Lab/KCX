@@ -11,6 +11,7 @@ export type ServiceContractDto = {
   payout: number;
   status: string;
   locationName: string | null;
+  imageFilename: string | null;
   issuerId: string;
   issuerName: string;
   executorId: string | null;
@@ -37,7 +38,7 @@ export async function listContractsBoard(db: Db, opts: ServiceContractListOption
 
   const rows = await db.execute<{
     id: string; title: string; description: string | null; category: string;
-    payout: string; status: string; location_name: string | null;
+    payout: string; status: string; location_name: string | null; image_filename: string | null;
     issuer_id: string; issuer_name: string; executor_id: string | null; executor_name: string | null;
     // Raw execute() hands back whatever the driver produced — string or Date depending on
     // the column and parser, so these are normalised below rather than trusted.
@@ -45,7 +46,7 @@ export async function listContractsBoard(db: Db, opts: ServiceContractListOption
     issuer_confirmed_at: string | Date | null; executor_confirmed_at: string | Date | null;
   }>(sql`
     SELECT c.id::text, c.title, c.description, c.category, c.payout::text, c.status,
-           l.name AS location_name,
+           l.name AS location_name, c.image_filename,
            c.issuer_id::text, iss.display_name AS issuer_name,
            c.executor_id::text, exe.display_name AS executor_name,
            c.expires_at, c.created_at, c.issuer_confirmed_at, c.executor_confirmed_at
@@ -67,6 +68,7 @@ export async function listContractsBoard(db: Db, opts: ServiceContractListOption
     payout: Number(r.payout),
     status: r.status,
     locationName: r.location_name,
+    imageFilename: r.image_filename,
     issuerId: r.issuer_id,
     issuerName: r.issuer_name,
     executorId: r.executor_id,
@@ -80,21 +82,11 @@ export async function listContractsBoard(db: Db, opts: ServiceContractListOption
   }));
 }
 
-/**
- * aUEC the issuer has promised across open and in-progress contracts.
- *
- * A contract with no money behind it is just a wish, so posting one commits the payout
- * the same way a buy order commits its cost. This is intentionally a separate figure from
- * the commodity collateral — the two are summed by the caller when checking capacity.
+/*
+ * Contract payouts are collateral like any other obligation, so they are counted inside
+ * COMMITTED_AUEC in queries/collateral.ts — not here. Keeping a second, separate figure
+ * meant only the one caller that remembered to add it saw a trader's real exposure.
  */
-export async function committedContractPayouts(db: Db, userId: string): Promise<number> {
-  const res = await db.execute<{ total: string }>(sql`
-    SELECT coalesce(sum(payout), 0)::text AS total
-    FROM service_contracts
-    WHERE issuer_id = ${userId}::uuid AND status IN ('open','in_progress')
-  `);
-  return Number(res.rows[0]?.total ?? 0);
-}
 
 export type ServiceContractResult = { ok: true; contractId?: string } | { ok: false; error: string };
 

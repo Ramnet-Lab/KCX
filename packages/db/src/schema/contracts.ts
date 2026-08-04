@@ -73,6 +73,12 @@ export const serviceContracts = pgTable(
     /** Agreed payment in aUEC, held as a commitment against the issuer's balance. */
     payout: bigint("payout", { mode: "number" }).notNull(),
     locationId: integer("location_id").references(() => locations.id),
+    /**
+     * Generated filename of an attached screenshot — a target, a wreck, cargo on a pad.
+     * Stored as a bare name, never a path or URL, so nothing user-supplied is ever
+     * interpolated into a filesystem lookup.
+     */
+    imageFilename: text("image_filename"),
 
     status: text("status", { enum: CONTRACT_STATUSES }).notNull().default("open"),
     /** Dual confirmation, exactly as commodity escrow works — neither side alone settles. */

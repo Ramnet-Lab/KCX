@@ -140,6 +140,24 @@ export function ContractBoard({
 
               {c.description && <p className="mt-1 whitespace-pre-wrap text-xs text-ink-dim">{c.description}</p>}
 
+              {c.imageFilename && (
+                <a
+                  href={`/api/uploads/contracts/${c.imageFilename}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-2 block w-fit"
+                  title="Open full size"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`/api/uploads/contracts/${c.imageFilename}`}
+                    alt={`Reference image for ${c.title}`}
+                    loading="lazy"
+                    className="max-h-48 rounded border border-line object-contain"
+                  />
+                </a>
+              )}
+
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-faint">
                 <span>
                   posted by <span className="text-ink-dim">{c.issuerName}</span>
@@ -219,6 +237,8 @@ export function ContractBoard({
 }
 
 function ComposeContract({ onPosted }: { onPosted: () => void }) {
+  const [image, setImage] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState<Category>("hauling");
@@ -246,6 +266,16 @@ function ComposeContract({ onPosted }: { onPosted: () => void }) {
       if (!res.ok) {
         setError(body.error ?? "Could not post");
         return;
+      }
+      // The contract exists either way; a failed image shouldn't discard the whole post.
+      if (image && body.id) {
+        const fd = new FormData();
+        fd.append("image", image);
+        const up = await fetch(`/api/service-contracts/${body.id}/image`, { method: "POST", body: fd });
+        if (!up.ok) {
+          const upBody = await up.json().catch(() => ({}));
+          setError(`Contract posted, but the image failed: ${upBody.error ?? "upload error"}`);
+        }
       }
       onPosted();
     } finally {
@@ -323,6 +353,46 @@ function ComposeContract({ onPosted }: { onPosted: () => void }) {
             ))}
           </div>
         </div>
+
+        <label className="block">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">
+            Screenshot (optional)
+          </span>
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/gif"
+            onChange={(e) => {
+              const f = e.target.files?.[0] ?? null;
+              if (f && f.size > 5 * 1024 * 1024) {
+                setError("Image must be 5 MB or smaller");
+                return;
+              }
+              setError(null);
+              setImage(f);
+              setPreview(f ? URL.createObjectURL(f) : null);
+            }}
+            className="mt-1 w-full text-xs text-ink-dim file:mr-3 file:rounded file:border file:border-line file:bg-panel-2 file:px-3 file:py-1.5 file:text-xs file:text-ink-dim hover:file:text-ink"
+          />
+          <span className="mt-1 block text-[11px] text-ink-faint">
+            A target, a wreck, cargo on the pad — whatever makes the job clear. JPEG, PNG,
+            WebP or GIF, up to 5 MB. Location data is stripped from photos on upload.
+          </span>
+          {preview && (
+            <span className="mt-2 flex items-center gap-2">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={preview} alt="" className="h-20 w-20 rounded border border-line object-cover" />
+              <button
+                onClick={() => {
+                  setImage(null);
+                  setPreview(null);
+                }}
+                className="tap text-xs text-ink-faint hover:text-danger"
+              >
+                remove
+              </button>
+            </span>
+          )}
+        </label>
 
         {error && <div className="rounded border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">{error}</div>}
 

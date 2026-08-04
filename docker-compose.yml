@@ -66,8 +66,12 @@ services:
       PUBLIC_ORIGIN: ${PUBLIC_ORIGIN}
       RP_ID: ${RP_ID}
       IP_HASH_SALT: ${IP_HASH_SALT:?set IP_HASH_SALT in .env}
+      UPLOAD_DIR: /app/uploads
       ALLOW_DEV_LOGIN: "false"
       TZ: UTC
+    volumes:
+      # Uploaded contract images must outlive the container.
+      - uploads:/app/uploads
 
   caddy:
     image: caddy:2-alpine
@@ -85,6 +89,7 @@ services:
       - caddy-config:/config
 
 volumes:
+  uploads:
   db-data:
   caddy-data:
   caddy-config:

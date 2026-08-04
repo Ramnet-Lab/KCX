@@ -1,6 +1,5 @@
 import {
   buyCapacity,
-  committedContractPayouts,
   contractEvents,
   gameVersions,
   getDb,
@@ -58,11 +57,8 @@ export async function POST(request: Request) {
   // A contract nobody can pay for is worthless to whoever does the work, so the payout is
   // backed the same way a buy order is: against the balance, minus everything already
   // promised to open orders, live escrows, and other contracts.
-  const [capacity, alreadyPromised] = await Promise.all([
-    buyCapacity(db, user.id),
-    committedContractPayouts(db, user.id),
-  ]);
-  const available = capacity.balance - capacity.committed - alreadyPromised;
+  const capacity = await buyCapacity(db, user.id);
+  const available = capacity.available;
   if (input.payout > available) {
     return NextResponse.json(
       {
