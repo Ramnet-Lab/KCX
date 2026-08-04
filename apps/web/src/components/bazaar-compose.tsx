@@ -9,6 +9,7 @@ import {
   type BazaarListingType,
 } from "@kcx/shared";
 import { useState } from "react";
+import { BazaarItemPicker, ItemPriceHistory, type PickedItem } from "@/components/bazaar-item-picker";
 import { fmtAuec } from "@/lib/countdown";
 
 const MAX_IMAGES = 6;
@@ -32,6 +33,7 @@ const MODES: { value: BazaarListingType; label: string; blurb: string }[] = [
  * told which photo didn't make it.
  */
 export function BazaarCompose({ onPosted }: { onPosted: (id: string) => void }) {
+  const [item, setItem] = useState<PickedItem | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState<BazaarCategory>("ships");
@@ -90,6 +92,10 @@ export function BazaarCompose({ onPosted }: { onPosted: (id: string) => void }) 
         body: JSON.stringify({
           title: title.trim(),
           description: description.trim() || undefined,
+          // An id when they picked from the list, a name when they typed one the catalogue
+          // doesn't have yet — the server decides which, and creates only on a genuinely
+          // new normalised key.
+          ...(item?.id != null ? { itemId: item.id } : item ? { itemName: item.name } : {}),
           category,
           listingType,
           ...(hasBuyNow ? { buyNowPrice: buyNow } : {}),
@@ -126,8 +132,28 @@ export function BazaarCompose({ onPosted }: { onPosted: (id: string) => void }) 
     <div className="mb-4 rounded border border-line bg-panel p-4">
       <h2 className="mb-3 text-sm font-bold text-ink">List an item</h2>
       <div className="space-y-3">
+        <div>
+          <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">
+            Which item — pick it, or type its in-game name
+          </span>
+          <BazaarItemPicker
+            value={item}
+            onChange={(picked) => {
+              setItem(picked);
+              // The item is the obvious starting point for the headline; the seller edits it
+              // from there rather than typing the name twice.
+              if (picked && !title.trim()) setTitle(picked.name);
+            }}
+          />
+          {/* Priced against what these have actually gone for, before the price box rather
+              than after it — a reference shown afterwards is a reference nobody used. */}
+          <ItemPriceHistory itemId={item?.id ?? null} />
+        </div>
+
         <label className="block">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">What are you selling</span>
+          <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">
+            Headline buyers see
+          </span>
           <input
             value={title}
             onChange={(e) => setTitle(e.target.value)}

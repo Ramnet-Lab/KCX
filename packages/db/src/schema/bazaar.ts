@@ -67,10 +67,81 @@ export const BAZAAR_LISTING_STATUSES = [
 /** Statuses in which the listing is still on the board and its clock still runs. */
 export const BAZAAR_LIVE_STATUSES = ["active", "paused"] as const;
 
+export const BAZAAR_ITEM_SOURCES = [
+  /** From UEX's /items walk — armour, weapons, components, clothing, liveries. */
+  "uex_item",
+  /** From UEX's /vehicles — ships and ground vehicles. */
+  "uex_vehicle",
+  /** Typed in by a seller because it wasn't in the list yet. */
+  "player",
+] as const;
+
+/**
+ * The item catalogue: what a seller is actually selling, as opposed to how they advertised it.
+ *
+ * A listing title is an advertisement ("Cutlass Black — fully kitted, S4 shields") and no two
+ * sellers write it the same way, so titles can never answer "what did this go for last time".
+ * This table is the thing prices attach to.
+ *
+ * It is seeded from UEX — ~7,700 items across 66 categories plus ~280 vehicles — and grows
+ * from below: a seller who can't find their item types its in-game inventory name and that
+ * becomes an entry the next seller picks from. Both kinds live in one table because a buyer
+ * searching for a rifle should not have to know which half of the catalogue it came from,
+ * and `source` records which it was.
+ *
+ * `nameKey` is the normalised form (see @kcx/shared itemNameKey) and carries the uniqueness
+ * constraint. Matching on the display name instead would let "P4-AR", "p4 ar" and a
+ * copy-paste with a non-breaking space become three items, and then price history for the
+ * rifle is split three ways and every one of them reads as thin.
+ */
+export const bazaarItems = pgTable(
+  "bazaar_items",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    source: text("source", { enum: BAZAAR_ITEM_SOURCES }).notNull(),
+    /** The id UEX knows it by, for re-syncing. Null on player-contributed entries. */
+    sourceId: integer("source_id"),
+    /** UEX's uuid, which is the game's own identifier where it has one. */
+    uuid: text("uuid"),
+    /** As shown to people. Never used for matching. */
+    name: text("name").notNull(),
+    /** Normalised match key — the column uniqueness and search actually run on. */
+    nameKey: text("name_key").notNull(),
+    section: text("section"),
+    category: text("category"),
+    companyName: text("company_name"),
+    slug: text("slug"),
+    gameVersion: text("game_version"),
+    /** Who first typed it in. Null for anything that came from UEX. */
+    createdById: uuid("created_by_id").references(() => users.id),
+    /**
+     * Listings ever created against this item. Ranks the picker so the things people
+     * actually sell surface above the 600 helmets nobody has ever listed.
+     */
+    listingCount: integer("listing_count").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("bazaar_items_key").on(t.nameKey),
+    /** Re-sync looks rows up by where they came from. */
+    uniqueIndex("bazaar_items_source").on(t.source, t.sourceId),
+    index("bazaar_items_section").on(t.section, t.category),
+    /** Picker ordering: most-listed first within a search. */
+    index("bazaar_items_popular").on(t.listingCount),
+  ],
+);
+
 export const bazaarListings = pgTable(
   "bazaar_listings",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    /**
+     * What this listing is, in catalogue terms. Nullable because listings predate the
+     * catalogue and because a bundle genuinely isn't one item — but it is what price
+     * history hangs off, so a listing without it gets none.
+     */
+    itemId: bigint("item_id", { mode: "number" }).references(() => bazaarItems.id),
     sellerId: uuid("seller_id")
       .notNull()
       .references(() => users.id),
@@ -121,6 +192,8 @@ export const bazaarListings = pgTable(
     index("bazaar_board").on(t.status, t.bumpedAt),
     index("bazaar_seller").on(t.sellerId, t.status),
     index("bazaar_category").on(t.category, t.status),
+    /** "What did this item last go for" walks listings by item, newest first. */
+    index("bazaar_listings_item").on(t.itemId, t.createdAt),
     /** The sweep looks up auctions whose clock has run out. */
     index("bazaar_auction_end").on(t.auctionEndsAt),
     index("bazaar_expiry").on(t.expiresAt),

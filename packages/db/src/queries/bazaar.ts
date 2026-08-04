@@ -1,8 +1,10 @@
+import { ITEM_NAME_MAX, isUsableItemName, itemNameKey } from "@kcx/shared";
 import { and, asc, desc, eq, lte, sql } from "drizzle-orm";
 import type { Db } from "../client";
 import {
   bazaarBids,
   bazaarEvents,
+  bazaarItems,
   bazaarListingImages,
   bazaarListings,
   bazaarRatings,
@@ -87,6 +89,9 @@ export const EMPTY_BAZAAR_STANDING: BazaarStanding = {
 export type BazaarListingDto = {
   id: string;
   title: string;
+  /** Catalogue entry this listing is of, when the seller named one. */
+  itemId: number | null;
+  itemName: string | null;
   description: string | null;
   category: string;
   listingType: string;
@@ -139,6 +144,8 @@ export type BazaarListOptions = {
 type ListingRow = {
   id: string;
   title: string;
+  item_id: string | null;
+  item_name: string | null;
   description: string | null;
   category: string;
   listing_type: string;
@@ -173,6 +180,8 @@ function toListingDto(r: ListingRow, viewer: string | null, standing: BazaarStan
   return {
     id: r.id,
     title: r.title,
+    itemId: r.item_id != null ? Number(r.item_id) : null,
+    itemName: r.item_name,
     description: r.description,
     category: r.category,
     listingType: r.listing_type,
@@ -214,7 +223,8 @@ function toListingDto(r: ListingRow, viewer: string | null, standing: BazaarStan
 /** The shared SELECT behind both the board and a single listing. */
 function listingSelect(viewer: string | null) {
   return sql`
-    SELECT l.id::text, l.title, l.description, l.category, l.listing_type,
+    SELECT l.id::text, l.title, l.item_id::text, it.name AS item_name,
+           l.description, l.category, l.listing_type,
            l.buy_now_price::text, l.start_price::text, l.current_bid::text,
            l.current_bidder_id::text, hb.display_name AS current_bidder_name,
            l.bid_count, coalesce(bc.n, 0)::int AS bidder_count,
@@ -229,6 +239,7 @@ function listingSelect(viewer: string | null) {
     JOIN users s ON s.id = l.seller_id
     LEFT JOIN users hb ON hb.id = l.current_bidder_id
     LEFT JOIN locations loc ON loc.id = l.location_id
+    LEFT JOIN bazaar_items it ON it.id = l.item_id
     LEFT JOIN LATERAL (
       SELECT array_agg(i.filename ORDER BY i.sort_index, i.id) AS files
       FROM bazaar_listing_images i WHERE i.listing_id = l.id
@@ -942,6 +953,223 @@ export async function myBazaarListings(db: Db, userId: string): Promise<BazaarLi
     sort: "newest",
     limit: 300,
   });
+}
+
+/* ------------------------------- Item catalogue ------------------------------ */
+
+export type BazaarItemDto = {
+  id: number;
+  name: string;
+  section: string | null;
+  category: string | null;
+  companyName: string | null;
+  source: string;
+  listingCount: number;
+};
+
+/**
+ * Typeahead over the catalogue.
+ *
+ * Matching runs on the normalised key, not the display name, so a seller typing "p4 ar"
+ * finds "P4-AR Rifle" — which is the entire reason the key column exists.
+ *
+ * The ranking is four rules, in this order, and each one is there because the rule above it
+ * left something obviously wrong at the top:
+ *
+ *  1. An exact key match, always first. If you typed the item's name, you meant that item.
+ *  2. What people actually list. Over time this is the only rule that matters.
+ *  3. Vehicles ahead of items on a tie. "cutlass black" otherwise returns the plushie, the
+ *     ship armour and the livery before the ship — they are shorter names that start with
+ *     the term, and every one of them is named AFTER the thing you were looking for.
+ *  4. Where the match falls, then length. Between two equal candidates, the one whose name
+ *     is mostly your search term is the closer answer.
+ */
+export async function searchBazaarItems(
+  db: Db,
+  query: string,
+  opts: { limit?: number } = {},
+): Promise<BazaarItemDto[]> {
+  const key = itemNameKey(query);
+  if (key.length < 2) return [];
+  const rows = await db.execute<{
+    id: string; name: string; section: string | null; category: string | null;
+    company_name: string | null; source: string; listing_count: number;
+  }>(sql`
+    SELECT id::text, name, section, category, company_name, source, listing_count
+    FROM bazaar_items
+    WHERE name_key LIKE ${`%${key}%`}
+    ORDER BY (name_key = ${key}) DESC,
+             listing_count DESC,
+             (source = 'uex_vehicle') DESC,
+             position(${key} in name_key),
+             length(name_key),
+             name
+    LIMIT ${Math.min(opts.limit ?? 20, 50)}
+  `);
+  return rows.rows.map((r) => ({
+    id: Number(r.id),
+    name: r.name,
+    section: r.section,
+    category: r.category,
+    companyName: r.company_name,
+    source: r.source,
+    listingCount: r.listing_count,
+  }));
+}
+
+export async function getBazaarItem(db: Db, id: number): Promise<BazaarItemDto | null> {
+  const [row] = await db.select().from(bazaarItems).where(eq(bazaarItems.id, id));
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    section: row.section,
+    category: row.category,
+    companyName: row.companyName,
+    source: row.source,
+    listingCount: row.listingCount,
+  };
+}
+
+/**
+ * Find the catalogue entry for a typed name, creating it if this is the first of its kind.
+ *
+ * The lookup is on the normalised key, so a seller who types a name that already exists in
+ * any spelling gets the existing entry — that is what keeps one item's price history in one
+ * place. Only a genuinely new key creates a row, and it is marked `player` so a later UEX
+ * sync can adopt it rather than duplicate it.
+ */
+export async function resolveOrCreateItem(
+  db: Db,
+  opts: { name: string; userId: string },
+): Promise<{ ok: true; item: BazaarItemDto; created: boolean } | { ok: false; error: string }> {
+  const name = opts.name.trim().slice(0, ITEM_NAME_MAX);
+  if (!isUsableItemName(name)) {
+    return { ok: false, error: "Give the item's in-game name — letters or numbers, at least two of them." };
+  }
+  const key = itemNameKey(name);
+
+  const [existing] = await db.select().from(bazaarItems).where(eq(bazaarItems.nameKey, key));
+  if (existing) {
+    return {
+      ok: true,
+      created: false,
+      item: {
+        id: existing.id,
+        name: existing.name,
+        section: existing.section,
+        category: existing.category,
+        companyName: existing.companyName,
+        source: existing.source,
+        listingCount: existing.listingCount,
+      },
+    };
+  }
+
+  // onConflictDoNothing + re-read rather than a bare insert: two sellers naming the same new
+  // item at the same moment must end up on one row, not one row and one 500.
+  const [created] = await db
+    .insert(bazaarItems)
+    .values({ source: "player", name, nameKey: key, createdById: opts.userId })
+    .onConflictDoNothing({ target: bazaarItems.nameKey })
+    .returning();
+
+  const row = created ?? (await db.select().from(bazaarItems).where(eq(bazaarItems.nameKey, key)))[0];
+  if (!row) return { ok: false, error: "Could not add that item" };
+  return {
+    ok: true,
+    created: created != null,
+    item: {
+      id: row.id,
+      name: row.name,
+      section: row.section,
+      category: row.category,
+      companyName: row.companyName,
+      source: row.source,
+      listingCount: row.listingCount,
+    },
+  };
+}
+
+/**
+ * What this item has actually sold for.
+ *
+ * Settled sales only — an asking price nobody paid is not evidence of anything, and a
+ * listing sitting unsold at ten million says only that ten million was too much. Auction
+ * results and fixed-price sales are both included: both are a price two people agreed on.
+ *
+ * Everything here is per-unit, so a lot of twenty and a single item compare directly.
+ */
+export type ItemPriceHistory = {
+  itemId: number;
+  itemName: string;
+  /** Settled sales counted. Zero means there is no history and the seller is on their own. */
+  sales: number;
+  /** Distinct buyer/seller pairs behind them — one pair trading with itself isn't a market. */
+  pairs: number;
+  lastPrice: number | null;
+  lastSoldAt: string | null;
+  medianPrice: number | null;
+  lowPrice: number | null;
+  highPrice: number | null;
+  /** Most recent settled sales, newest first. */
+  recent: { price: number; quantity: number; soldAt: string; origin: string }[];
+};
+
+export async function itemPriceHistory(
+  db: Db,
+  itemId: number,
+  opts: { limit?: number } = {},
+): Promise<ItemPriceHistory | null> {
+  const [item] = await db.select().from(bazaarItems).where(eq(bazaarItems.id, itemId));
+  if (!item) return null;
+
+  const stats = await db.execute<{
+    sales: number; pairs: number; last_price: string | null; last_sold_at: string | Date | null;
+    median_price: string | null; low_price: string | null; high_price: string | null;
+  }>(sql`
+    SELECT count(*)::int AS sales,
+           count(DISTINCT least(sa.seller_id::text, sa.buyer_id::text)
+                       || greatest(sa.seller_id::text, sa.buyer_id::text))::int AS pairs,
+           (array_agg(sa.unit_price ORDER BY sa.closed_at DESC))[1]::text AS last_price,
+           max(sa.closed_at) AS last_sold_at,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY sa.unit_price)::bigint::text AS median_price,
+           min(sa.unit_price)::text AS low_price,
+           max(sa.unit_price)::text AS high_price
+    FROM bazaar_sales sa
+    JOIN bazaar_listings l ON l.id = sa.listing_id
+    WHERE l.item_id = ${itemId} AND sa.status = 'completed'
+  `);
+
+  const recent = await db.execute<{
+    unit_price: string; quantity: number; closed_at: string | Date; origin: string;
+  }>(sql`
+    SELECT sa.unit_price::text, sa.quantity, sa.closed_at, sa.origin
+    FROM bazaar_sales sa
+    JOIN bazaar_listings l ON l.id = sa.listing_id
+    WHERE l.item_id = ${itemId} AND sa.status = 'completed'
+    ORDER BY sa.closed_at DESC
+    LIMIT ${Math.min(opts.limit ?? 10, 50)}
+  `);
+
+  const s = stats.rows[0];
+  return {
+    itemId: item.id,
+    itemName: item.name,
+    sales: s?.sales ?? 0,
+    pairs: s?.pairs ?? 0,
+    lastPrice: s?.last_price != null ? Number(s.last_price) : null,
+    lastSoldAt: s?.last_sold_at ? new Date(s.last_sold_at).toISOString() : null,
+    medianPrice: s?.median_price != null ? Number(s.median_price) : null,
+    lowPrice: s?.low_price != null ? Number(s.low_price) : null,
+    highPrice: s?.high_price != null ? Number(s.high_price) : null,
+    recent: recent.rows.map((r) => ({
+      price: Number(r.unit_price),
+      quantity: r.quantity,
+      soldAt: new Date(r.closed_at).toISOString(),
+      origin: r.origin,
+    })),
+  };
 }
 
 /** Images on a listing, thumbnail first. */

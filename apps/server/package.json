@@ -7,7 +7,8 @@
     "typecheck": "tsc --noEmit",
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts",
-    "ingest": "tsx src/scripts/ingest.ts"
+    "ingest": "tsx src/scripts/ingest.ts",
+    "sync:items": "tsx src/scripts/sync-items.ts"
   },
   "dependencies": {
     "@kcx/db": "workspace:*",

@@ -10,6 +10,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { ItemPriceHistory } from "@/components/bazaar-item-picker";
 import { BazaarStandingBadge } from "@/components/trader-standing";
 import { countdown, fmtAuec, isClosingSoon, timeLeft } from "@/lib/countdown";
 
@@ -129,6 +130,11 @@ export function BazaarDetail({
               </span>
               <h1 className="text-lg font-bold text-ink">{l.title}</h1>
             </div>
+            {l.itemName && (
+              <p className="mt-1 text-xs text-ink-faint">
+                Listed as <span className="text-ink-dim">{l.itemName}</span>
+              </p>
+            )}
             {l.description && (
               <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-ink-dim">{l.description}</p>
             )}
@@ -284,6 +290,17 @@ export function BazaarDetail({
               only then does the aUEC move between your declared balances.
             </p>
           </div>
+
+          {/* What one of these has actually gone for, next to what this one is asking. A
+              buyer deciding whether the price is fair needs both numbers in one place. */}
+          {l.itemId != null && (
+            <div className="rounded border border-line bg-panel p-4">
+              <h2 className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">
+                What these go for
+              </h2>
+              <ItemPriceHistory itemId={l.itemId} />
+            </div>
+          )}
 
           {l.isSeller && <SellerPanel listing={l} busy={busy} onAct={act} onChanged={refresh} onError={setError} />}
         </div>

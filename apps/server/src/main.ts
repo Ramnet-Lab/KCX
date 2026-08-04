@@ -32,6 +32,7 @@ import { rebuildIndexSince } from "./jobs/index-points";
 import { checkGameVersion } from "./jobs/game-version";
 import { ingestPrices } from "./jobs/ingest-prices";
 import { ensureSnapshotInfra } from "./jobs/partitions";
+import { pruneUnusedPlayerItems, recountItemListings, syncItemCatalogue } from "./jobs/sync-items";
 import { syncMasterData } from "./jobs/sync-master";
 import { startMarketFeed } from "./ws/market-feed";
 import { createWsServer } from "./ws/server";
@@ -42,6 +43,7 @@ const QUEUES = {
   version: "check-game-version",
   partitions: "partition-maintenance",
   expireOrders: "expire-unfilled-orders",
+  items: "sync-item-catalogue",
 } as const;
 
 async function main() {
@@ -131,6 +133,9 @@ async function main() {
   // Singleton keys: dedupe queued (pre-active) duplicates of the same tick.
   await boss.schedule(QUEUES.ingest, `*/${INGEST_INTERVAL_MINUTES} * * * *`, undefined, { singletonKey: QUEUES.ingest });
   await boss.schedule(QUEUES.master, "0 3 * * *", undefined, { singletonKey: QUEUES.master });
+  // An hour after the master sync, so the two aren't walking UEX at the same minute. The
+  // item catalogue is ~66 sequential category calls and only changes on a game patch.
+  await boss.schedule(QUEUES.items, "0 4 * * *", undefined, { singletonKey: QUEUES.items });
   await boss.schedule(QUEUES.version, "15 * * * *", undefined, { singletonKey: QUEUES.version });
   await boss.schedule(QUEUES.partitions, "0 0 1 * *", undefined, { singletonKey: QUEUES.partitions });
   // Fill-by deadlines resolve every 5 minutes; expired orders leave no market footprint.
@@ -145,6 +150,13 @@ async function main() {
   });
   await boss.work(QUEUES.version, async () => {
     await checkGameVersion();
+  });
+  await boss.work(QUEUES.items, async () => {
+    await syncItemCatalogue();
+    const reranked = await recountItemListings();
+    if (reranked > 0) console.log(`[sync-items] re-ranked ${reranked} catalogue entr(ies)`);
+    const pruned = await pruneUnusedPlayerItems();
+    if (pruned > 0) console.log(`[sync-items] pruned ${pruned} unused player-typed entr(ies)`);
   });
   await boss.work(QUEUES.partitions, async () => {
     await ensureSnapshotInfra();
@@ -195,6 +207,15 @@ async function main() {
     await boss.send(QUEUES.ingest, {}, { singletonKey: QUEUES.ingest });
   }
   await checkGameVersion().catch((err) => console.error("[game-version]", err));
+
+  // Seed the item catalogue on first boot rather than waiting for 04:00 — until it has run,
+  // the bazaar's item picker is empty and every seller is forced to type a name, which is
+  // exactly how the catalogue fills with near-duplicates.
+  const catalogue = await getDb().execute<{ n: string }>(sql`SELECT count(*)::text AS n FROM bazaar_items`);
+  if (Number(catalogue.rows[0]?.n ?? 0) === 0) {
+    console.log("[main] item catalogue empty — seeding from UEX");
+    await boss.send(QUEUES.items, {}, { singletonKey: QUEUES.items });
+  }
 
   console.log(`[main] KCX server up — ingest every ${INGEST_INTERVAL_MINUTES}m, master 03:00, version watch hourly`);
 

@@ -1,4 +1,12 @@
-import { bazaarEvents, bazaarListings, gameVersions, getDb, listBazaarListings } from "@kcx/db";
+import {
+  bazaarEvents,
+  bazaarListings,
+  gameVersions,
+  getBazaarItem,
+  getDb,
+  listBazaarListings,
+  resolveOrCreateItem,
+} from "@kcx/db";
 import { BAZAAR_CATEGORIES, BAZAAR_LISTING_TYPES, bazaarCreateInput } from "@kcx/shared";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
@@ -66,6 +74,21 @@ export async function POST(request: Request) {
   const isAuction = input.listingType !== "buy_now";
   const runsUntil = new Date(Date.now() + input.runForHours * 3_600_000);
 
+  // Resolve the catalogue entry before anything is written. A picked id is used as given; a
+  // typed name is matched on its normalised key and only creates a row when it is genuinely
+  // the first of its kind — that is what stops "P4-AR" and "p4 ar" becoming two items with
+  // half the price history each.
+  let itemId: number | null = null;
+  if (input.itemId != null) {
+    const item = await getBazaarItem(db, input.itemId);
+    if (!item) return NextResponse.json({ error: "That item isn't in the catalogue" }, { status: 400 });
+    itemId = item.id;
+  } else if (input.itemName) {
+    const resolved = await resolveOrCreateItem(db, { name: input.itemName, userId: user.id });
+    if (!resolved.ok) return NextResponse.json({ error: resolved.error }, { status: 400 });
+    itemId = resolved.item.id;
+  }
+
   try {
     const listing = await db.transaction(async (tx) => {
       const [created] = await tx
@@ -73,6 +96,7 @@ export async function POST(request: Request) {
         .values({
           sellerId: user.id,
           seasonId: season.id,
+          itemId,
           title: input.title,
           description: input.description?.trim() || null,
           category: input.category,

@@ -4,8 +4,16 @@ import { UEX_DEFAULT_BASE, slugify, uexEnvelope } from "@kcx/shared";
 const BASE = () => process.env.UEX_API_BASE ?? UEX_DEFAULT_BASE;
 const TOKEN = () => process.env.UEX_API_TOKEN;
 
-/** Fetch a UEX endpoint and return the envelope's `data` verbatim (object or array). */
-export async function fetchUexData(endpoint: string): Promise<unknown> {
+/**
+ * Fetch a UEX endpoint and return the envelope's `data` verbatim (object or array).
+ *
+ * `allowEmpty` distinguishes the two things a null `data` can mean. On a commodities or
+ * terminals pull it means the feed is broken and must be loud. On a per-category item walk
+ * it means the category is genuinely empty — ten of UEX's ~66 item categories are — and
+ * reporting those as failures every night would train everyone to ignore the one that
+ * eventually matters.
+ */
+export async function fetchUexData(endpoint: string, opts: { allowEmpty?: boolean } = {}): Promise<unknown> {
   const token = TOKEN();
   const res = await fetch(`${BASE()}${endpoint}`, {
     headers: {
@@ -17,12 +25,15 @@ export async function fetchUexData(endpoint: string): Promise<unknown> {
   });
   if (!res.ok) throw new Error(`UEX ${endpoint} → HTTP ${res.status}`);
   const body = (await res.json()) as { status?: string; data?: unknown };
-  if (body.data == null) throw new Error(`UEX ${endpoint} → empty data (status=${body.status})`);
+  if (body.data == null) {
+    if (opts.allowEmpty) return [];
+    throw new Error(`UEX ${endpoint} → empty data (status=${body.status})`);
+  }
   return body.data;
 }
 
-export async function fetchUexRows(endpoint: string): Promise<unknown[]> {
-  const data = await fetchUexData(endpoint);
+export async function fetchUexRows(endpoint: string, opts: { allowEmpty?: boolean } = {}): Promise<unknown[]> {
+  const data = await fetchUexData(endpoint, opts);
   if (!Array.isArray(data)) throw new Error(`UEX ${endpoint} → expected array data`);
   return data;
 }

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ITEM_NAME_MAX } from "./item-key";
 
 /**
  * Shared bazaar contracts — the same shapes the compose form validates against and the API
@@ -56,6 +57,14 @@ export const BAZAAR_MAX_HOURS = 720;
 
 const base = {
   title: z.string().trim().min(4).max(BAZAAR_TITLE_MAX),
+  /**
+   * What the listing is, in catalogue terms — either an entry the seller picked, or a name
+   * they typed because it wasn't in the list yet. Optional so a genuine bundle can still be
+   * listed, but a listing without one gets no price history and shows up nowhere an item
+   * is being looked up.
+   */
+  itemId: z.number().int().positive().optional(),
+  itemName: z.string().trim().max(ITEM_NAME_MAX).optional(),
   description: z.string().trim().max(BAZAAR_DESCRIPTION_MAX).optional(),
   category: z.enum(BAZAAR_CATEGORIES).default("other"),
   locationId: z.number().int().positive().nullable().optional(),

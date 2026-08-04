@@ -99,6 +99,13 @@
       "when": 1785874529511,
       "tag": "0013_bulk_baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1785875034431,
+      "tag": "0014_bazaar_items",
+      "breakpoints": true
     }
   ]
 }
