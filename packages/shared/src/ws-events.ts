@@ -37,6 +37,15 @@ export type TickerEntry = {
   /** True when the two NPC prices aren't even in the same system. */
   npcSplit: boolean;
   /**
+   * False when NO terminal anywhere quotes this commodity, so players are the only market.
+   *
+   * Mostly raw ore: terminals buy refined material, so `Quantainium (Raw)` has no NPC price
+   * by design while `Quantainium` sells at 170,000. Also hand-gathered goods and contraband.
+   * These have no baseline to seed from — the first player trade is the only price there will
+   * ever be — which makes them the commodities a player exchange exists for.
+   */
+  npcMarket: boolean;
+  /**
    * KCX mark — the player price. Null until this commodity has ever had a qualifying fill;
    * once it has, the NPC baseline never takes the headline back.
    */

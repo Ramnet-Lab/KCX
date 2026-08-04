@@ -100,24 +100,24 @@ async function main() {
   );
   check("every traded commodity has a player mark", tradedNoMark === 0);
 
-  // A marks row is written for every tradable commodity, including ones nothing trades.
-  // Those must not reach the ticker — they would render as tiles with no price at all.
+  // Commodities no terminal quotes are SHOWN, not hidden — they are mostly raw ore, which
+  // terminals only buy once refined, and they are exactly where a player exchange is the only
+  // market. Hiding them created a chicken and egg: invisible until traded, hard to trade while
+  // invisible. What must hold is that they rank last and are labelled, never that they vanish.
   const priceless = Number(
     await scalar(sql`
       SELECT count(*)::text FROM commodity_marks_latest
       WHERE mark_price IS NULL AND best_sell IS NULL AND best_buy IS NULL
     `),
   );
-  const shown = (await tickerEntries(db)).length;
-  const shouldShow = Number(
-    await scalar(sql`
-      SELECT count(*)::text FROM commodity_marks_latest m JOIN commodities c ON c.id = m.commodity_id
-      WHERE c.is_tradable AND (m.mark_price IS NOT NULL OR m.best_sell IS NOT NULL OR m.best_buy IS NOT NULL)
-    `),
+  const tradable = Number(await scalar(sql`SELECT count(*)::text FROM commodities WHERE is_tradable`));
+  const rows = await tickerEntries(db);
+  check("the ticker shows every tradable commodity", rows.length === tradable, `${rows.length} of ${tradable}`);
+  check(
+    "commodities with no NPC market are flagged, not dropped",
+    rows.filter((e) => !e.npcMarket).length === priceless,
+    `${priceless} player-market-only`,
   );
-  check("the ticker excludes commodities with no price at all", shown === shouldShow, `${shown} shown, ${priceless} withheld`);
-  const blank = (await tickerEntries(db)).filter((e) => e.price == null && e.bestBuy == null).length;
-  check("no ticker entry is entirely priceless", blank === 0);
 
   // Bulk figures: the headline NPC price can come from a terminal holding 3 SCU. Where a
   // bulk price exists it must be no better than the headline — a terminal that stocks MORE

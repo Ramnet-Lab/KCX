@@ -89,7 +89,10 @@ export default async function CommoditiesPage() {
     console.error("[commodities] query failed:", err instanceof Error ? err.message : err);
   }
   const traded = rows
-    .filter((r) => r.bestSell != null || r.bestBuy != null)
+    // No NPC-price filter. A commodity no terminal quotes still belongs in the directory —
+    // 81 of 204 are in that position, mostly raw ore that terminals only buy once refined,
+    // and they are precisely the ones a player exchange exists to price. They sort last and
+    // say "no NPC market" rather than being omitted.
     .map((r) => {
       const npcSell = r.bestSell != null ? Number(r.bestSell) : null;
       const npcBuy = r.bestBuy != null ? Number(r.bestBuy) : null;
@@ -110,8 +113,20 @@ export default async function CommoditiesPage() {
         buySystem: mark?.buySystem ?? null,
         npcSplit:
           mark?.sellSystem != null && mark?.buySystem != null && mark.sellSystem !== mark.buySystem,
+        // Matches the wall's rule exactly: no NPC market means neither side is quoted
+        // anywhere. Keying off the headline price being null instead wrongly flagged the ten
+        // commodities terminals SELL but never buy — those have a market, just not a sell
+        // price, and the Mark column simply shows a dash for them.
+        npcMarket: npcSell != null || npcBuy != null,
       };
     });
+
+  // Same tiering as the market wall: player-priced, then NPC-priced, then no price at all.
+  // Two views of one dataset that disagreed about ordering would just look broken.
+  traded.sort((a, b) => {
+    const tier = (r: (typeof traded)[number]) => (r.priceSource === "player" ? 0 : r.npcMarket ? 1 : 2);
+    return tier(a) - tier(b) || a.name.localeCompare(b.name);
+  });
 
   if (traded.length === 0) {
     return (
@@ -169,6 +184,14 @@ export default async function CommoditiesPage() {
                   {r.thin && (
                     <span className="ml-1 text-[9px] text-danger" title="Too few distinct counterparties to be reliable">
                       THIN
+                    </span>
+                  )}
+                  {!r.npcMarket && r.priceSource !== "player" && (
+                    <span
+                      className="text-[9px] font-bold text-accent"
+                      title="No NPC terminal buys or sells this — usually raw ore, which must be refined first. Players are the only market."
+                    >
+                      NO NPC MKT
                     </span>
                   )}
                 </td>

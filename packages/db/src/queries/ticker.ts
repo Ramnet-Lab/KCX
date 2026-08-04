@@ -69,13 +69,6 @@ export async function tickerEntries(db: Db): Promise<TickerEntry[]> {
     FROM commodities c
     JOIN commodity_marks_latest m ON m.commodity_id = c.id
     WHERE c.is_tradable
-      -- A marks row exists for every tradable commodity, including ones no terminal
-      -- currently trades and no player has ever traded. Those have no price of any kind and
-      -- must not occupy a tile — the previous ticker read the reference points, which only
-      -- existed where a price did, so surfacing them now would be a regression dressed up as
-      -- extra coverage. The row still gets written, so the commodity appears the moment it
-      -- has a price.
-      AND (m.mark_price IS NOT NULL OR m.best_sell IS NOT NULL OR m.best_buy IS NOT NULL)
     ORDER BY c.name
   `);
 
@@ -101,6 +94,18 @@ export async function tickerEntries(db: Db): Promise<TickerEntry[]> {
     const windowPairs = Number(r.window_pairs ?? 0);
     const lastTradedAt = r.last_traded_at ? new Date(r.last_traded_at).toISOString() : null;
 
+    /*
+     * No terminal anywhere quotes this commodity — on the live dataset that is 81 of 204,
+     * and 33 of them are raw ore. That is not missing data: terminals buy REFINED material,
+     * so `Quantainium (Raw)` has no NPC price by design while `Quantainium` sells at 170,000.
+     *
+     * These were hidden entirely, which created a chicken and egg: invisible until traded,
+     * hard to trade while invisible. They are also precisely where a player exchange is worth
+     * most, since there is no terminal to fall back on. So they are shown and labelled, and
+     * ranked below priced commodities so they don't crowd the wall.
+     */
+    const npcMarket = bestSell != null || bestBuy != null;
+
     return {
       commodityId: r.commodity_id,
       slug: r.slug,
@@ -125,6 +130,7 @@ export async function tickerEntries(db: Db): Promise<TickerEntry[]> {
       windowVolumeScu: Number(r.window_volume_scu ?? 0),
       windowPrintCount: Number(r.window_print_count ?? 0),
       windowPairs,
+      npcMarket,
       thin: markPrice != null && windowPairs < MARK_CONFIDENT_PAIRS,
       changePct,
       changeBasis: basis,

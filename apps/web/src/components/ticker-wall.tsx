@@ -70,6 +70,19 @@ function npcLine(entry: TickerEntry, compact: boolean) {
 
 /** Small badge explaining where a tile's headline price came from. */
 function sourceBadge(entry: TickerEntry) {
+  // No terminal quotes this at all — mostly raw ore, which terminals don't buy until it's
+  // refined. Saying so is the point: it marks the commodities where a player is the only
+  // counterparty there will ever be, rather than leaving them looking like missing data.
+  if (!entry.npcMarket && entry.markPrice == null) {
+    return (
+      <span
+        className="text-[9px] font-bold text-accent"
+        title="No NPC terminal buys or sells this — usually raw ore, which must be refined first. Players are the only market, so the first settled trade sets the price."
+      >
+        NO NPC MKT
+      </span>
+    );
+  }
   if (entry.priceSource !== "player") return null;
   return (
     <>
@@ -96,6 +109,7 @@ export function TickerWall({ entries, lastUpdate, flash, onPlaceOrder }: Props) 
   const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null);
   const [assignMenuFor, setAssignMenuFor] = useState<number | null>(null);
   const [creatingCollection, setCreatingCollection] = useState(false);
+  const [playerOnly, setPlayerOnly] = useState(false);
   const [newName, setNewName] = useState("");
   // State (not ref) — a ref-based gate lets the save-effects' first run clobber stored
   // data with defaults under StrictMode's double-invoked effects.
@@ -118,16 +132,19 @@ export function TickerWall({ entries, lastUpdate, flash, onPlaceOrder }: Props) 
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    // Player-priced commodities first — they're the ones that are actually a market — then
-    // by movement. Ranking a purely NPC tile above a traded one on a bigger poll-to-poll
-    // wobble buries the thing a trader came here for.
+    // Three tiers, in order: player-priced (a real market), NPC-priced, then the ones with no
+    // price at all. Ranking a purely NPC tile above a traded one on a bigger poll-to-poll
+    // wobble buries the thing a trader came here for; letting unpriced tiles float up on a
+    // null change would bury both.
+    const tier = (e: TickerEntry) => (e.priceSource === "player" ? 0 : e.price != null ? 1 : 2);
     let list = [...entries].sort((a, b) => {
-      if (a.priceSource !== b.priceSource) return a.priceSource === "player" ? -1 : 1;
+      if (tier(a) !== tier(b)) return tier(a) - tier(b);
       const am = Math.abs(a.changePct ?? 0);
       const bm = Math.abs(b.changePct ?? 0);
       if (bm !== am) return bm - am;
       return (b.price ?? 0) - (a.price ?? 0);
     });
+    if (playerOnly) list = list.filter((e) => !e.npcMarket);
     if (activeCollection) {
       const ids = new Set(activeCollection.commodityIds);
       list = list.filter((e) => ids.has(e.commodityId));
@@ -136,7 +153,9 @@ export function TickerWall({ entries, lastUpdate, flash, onPlaceOrder }: Props) 
       list = list.filter((e) => e.code.toLowerCase().includes(q) || e.name.toLowerCase().includes(q));
     }
     return list;
-  }, [entries, query, activeCollection]);
+  }, [entries, query, activeCollection, playerOnly]);
+
+  const playerOnlyCount = useMemo(() => entries.filter((e) => !e.npcMarket).length, [entries]);
 
   const membership = useMemo(() => {
     const m = new Map<number, number>();
@@ -293,6 +312,25 @@ export function TickerWall({ entries, lastUpdate, flash, onPlaceOrder }: Props) 
         >
           All ({entries.length})
         </button>
+        {/*
+          A way to actually find the no-terminal commodities. They sort last, which keeps the
+          wall readable but also means a miner holding raw ore would have to scroll past every
+          priced commodity to reach the ones they can actually sell here.
+        */}
+        {playerOnlyCount > 0 && (
+          <button
+            onClick={() => {
+              setPlayerOnly((v) => !v);
+              setActiveCollectionId(null);
+            }}
+            title="Commodities no NPC terminal trades — raw ore, gathered goods, contraband. Players are the only market."
+            className={`tap rounded-full border px-3 py-1.5 ${
+              playerOnly ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink"
+            }`}
+          >
+            No NPC market ({playerOnlyCount})
+          </button>
+        )}
         {collections.map((c) => (
           <span key={c.id} className="inline-flex items-center">
             <button
