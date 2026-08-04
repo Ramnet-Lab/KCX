@@ -12,7 +12,8 @@
     "check:bazaar": "tsx src/scripts/check-bazaar.ts",
     "check:alerts": "tsx src/scripts/check-alerts.ts",
     "check:orgs": "tsx src/scripts/check-orgs.ts",
-    "check:makers": "tsx src/scripts/check-makers.ts"
+    "check:makers": "tsx src/scripts/check-makers.ts",
+    "check:instalments": "tsx src/scripts/check-instalments.ts"
   },
   "dependencies": {
     "@kcx/db": "workspace:*",

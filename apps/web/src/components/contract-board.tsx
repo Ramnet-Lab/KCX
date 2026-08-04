@@ -2,7 +2,7 @@
 
 import type { ServiceContractDto } from "@kcx/db";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { ClassifiedBriefing } from "@/components/classified-briefing";
 import { ContractStandingBadge, StarPicker } from "@/components/trader-standing";
 
@@ -10,6 +10,84 @@ const fmt = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 0 
 
 const CATEGORIES = ["hauling", "escort", "mining", "salvage", "medical", "combat", "exploration", "other"] as const;
 type Category = (typeof CATEGORIES)[number];
+
+/**
+ * Glyphs stand in for the mobiGlas category icons. Deliberately plain unicode rather than an
+ * icon font: everything else on this site is monospace terminal furniture, and a pictorial
+ * icon set would read as a different application bolted on.
+ */
+const CATEGORY_ICON: Record<Category, string> = {
+  hauling: "▤",
+  escort: "◈",
+  mining: "⛏",
+  salvage: "♺",
+  medical: "✚",
+  combat: "⚔",
+  exploration: "◎",
+  other: "◇",
+};
+
+/**
+ * What still has to happen, as a checklist.
+ *
+ * The mobiGlas lists literal in-game objectives ("Deliver 0/1 Lab Sample to Seraphim
+ * Station"). We can't know the in-fiction task — it's free text the issuer wrote — so the
+ * equivalent here is the state of the AGREEMENT: the steps the exchange actually tracks and
+ * can tick off. That keeps the panel honest rather than inventing objectives we can't verify.
+ */
+function objectivesFor(c: ServiceContractDto): { text: string; done: boolean }[] {
+  const out: { text: string; done: boolean }[] = [];
+
+  if (c.status === "bidding") {
+    out.push({ text: `Sealed bidding open — ${c.bidCount} ${c.bidCount === 1 ? "bid" : "bids"} received`, done: false });
+    out.push({ text: "Lowest bid wins when the window closes; ties go to whoever bid first", done: false });
+    return out;
+  }
+  if (c.status === "awarded") {
+    out.push({ text: "Bidding closed and a winner picked", done: true });
+    out.push({ text: `${c.awardedToName ?? "The winner"} must accept before the window lapses`, done: false });
+    return out;
+  }
+  if (c.status === "open") {
+    out.push({
+      text: c.visibility === "classified" ? "Take the contract to unseal the brief" : "Take the contract to begin",
+      done: false,
+    });
+    if (c.locationName) out.push({ text: `Work at ${c.locationName}`, done: false });
+    return out;
+  }
+  if (c.status === "in_progress") {
+    out.push({ text: "Contract taken", done: true });
+    out.push({ text: "Executor marks the work complete", done: c.executorConfirmed });
+    out.push({ text: "Issuer confirms the work was done", done: c.issuerConfirmed });
+    out.push({ text: "Payout moves in-game between the two of you", done: false });
+    return out;
+  }
+  if (c.status === "completed") {
+    out.push({ text: "Both sides confirmed — contract settled", done: true });
+    return out;
+  }
+  out.push({ text: `Contract ${c.status}`, done: true });
+  return out;
+}
+
+/** Compact payout for the rail, where the column is ~4 characters wide. */
+function short(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1).replace(/\.0$/, "")}M`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
+  return String(n);
+}
+
+/**
+ * The countdown the mobiGlas shows against each job. Whichever clock is actually running:
+ * a contract out for bid is counting down to the close, everything else to its deadline.
+ */
+function railClock(c: ServiceContractDto): string | null {
+  if (c.status === "bidding" && c.bidsCloseAt) return countdown(c.bidsCloseAt);
+  if (c.status === "awarded" && c.awardExpiresAt) return countdown(c.awardExpiresAt);
+  if (c.expiresAt) return countdown(c.expiresAt);
+  return null;
+}
 
 const DEADLINES = [
   { hours: 24, label: "24 hours" },
@@ -151,6 +229,38 @@ export function ContractBoard({
     [contracts, category, mineOnly],
   );
 
+  // Grouped for the rail. Only categories with work appear — the mobiGlas doesn't list an
+  // empty board either, and eight always-visible zero rows would be mostly noise.
+  const grouped = useMemo(() => {
+    const by = new Map<Category, ServiceContractDto[]>();
+    for (const c of visible) {
+      const key = (CATEGORIES as readonly string[]).includes(c.category ?? "")
+        ? (c.category as Category)
+        : "other";
+      const list = by.get(key);
+      if (list) list.push(c);
+      else by.set(key, [c]);
+    }
+    return CATEGORIES.filter((k) => by.has(k)).map((k) => ({ key: k, items: by.get(k)! }));
+  }, [visible]);
+
+  // Categories start expanded. Collapsing is available, but a board that hides its contents
+  // by default makes a new visitor click before seeing anything at all.
+  const [collapsed, setCollapsed] = useState<Set<Category>>(new Set());
+  const toggleCat = (k: Category) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+
+  // Selection survives a refresh by id, but must fall back when filtering removes it —
+  // otherwise the detail pane keeps showing a contract the rail no longer lists.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = visible.find((c) => c.id === selectedId) ?? visible[0] ?? null;
+  const dossierRef = useRef<HTMLDivElement>(null);
+
   return (
     <div>
       {briefing && (
@@ -213,47 +323,244 @@ export function ContractBoard({
           <p>Need something hauled, escorted, or salvaged? Post the first one.</p>
         </div>
       ) : (
-        <div className="space-y-2">
-          {visible.map((c) => (
-            <article key={c.id} className={`rounded border p-3 ${c.isIssuer || c.isExecutor ? "border-accent/40" : "border-line"} bg-panel`}>
-              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                {c.category && (
-                  <span className="rounded bg-panel-2 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-ink-dim">
-                    {c.category}
-                  </span>
-                )}
-                {c.visibility === "classified" && (
-                  <span
-                    className="rounded bg-danger/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-danger"
-                    title="Details are hidden until someone takes this contract"
+        /*
+         * Contract Manager layout, after the in-game mobiGlas: a category rail on the left,
+         * the selected job's dossier on the right. Familiarity is the point — a Star Citizen
+         * player already knows how to read this, so the shape carries the meaning before any
+         * of our own labels do.
+         *
+         * Below lg the two panes stack: the rail full width, the dossier beneath it. A 320px
+         * sidebar next to a 40-character detail column is worse than either alone.
+         */
+        <div className="grid gap-3 lg:grid-cols-[minmax(260px,340px)_1fr] lg:items-start">
+          {/* ---------------------------------------------------------------- rail */}
+          {/*
+            The rail scrolls inside itself and sticks, as the in-game panel does. Without the
+            cap a busy board runs thousands of pixels past the dossier, and on a phone you
+            would scroll the entire category list before reaching the contract you just picked.
+          */}
+          <nav
+            className="rounded border border-line bg-panel p-2 lg:sticky lg:top-4 lg:max-h-[calc(100dvh-2rem)] lg:overflow-y-auto"
+            aria-label="Contracts by category"
+          >
+            {grouped.map(({ key, items }) => {
+              const isOpen = !collapsed.has(key);
+              return (
+                <div key={key} className="mb-1.5 last:mb-0">
+                  <button
+                    onClick={() => toggleCat(key)}
+                    aria-expanded={isOpen}
+                    className="tap flex w-full items-center gap-2 rounded border border-line bg-panel-2 px-2.5 py-2 text-left hover:border-ink-faint"
                   >
-                    ▩ Classified
-                  </span>
-                )}
-                {c.pricingMode === "bid" && (
-                  <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-accent">
-                    ⚖ Out for bid
-                  </span>
-                )}
-                <h3 className="text-sm font-bold text-ink">{c.title}</h3>
-                <span className="num ml-auto text-right text-sm font-bold text-up">
-                  {c.awardedAmount != null ? (
-                    <>
-                      {fmt(c.awardedAmount)} aUEC
-                      <span className="block text-[10px] font-normal text-ink-faint">
-                        won at · budget {fmt(c.payout)}
-                      </span>
-                    </>
-                  ) : c.pricingMode === "bid" ? (
-                    <>
-                      ≤ {fmt(c.payout)} aUEC
-                      <span className="block text-[10px] font-normal text-ink-faint">budget ceiling</span>
-                    </>
-                  ) : (
-                    <>{fmt(c.payout)} aUEC</>
+                    <span aria-hidden className="text-sm text-ink-dim">
+                      {CATEGORY_ICON[key]}
+                    </span>
+                    <span className="text-xs font-bold uppercase tracking-widest text-ink">{key}</span>
+                    <span className="num ml-auto flex h-5 min-w-5 items-center justify-center rounded-full border border-line px-1 text-[10px] text-ink-dim">
+                      {items.length}
+                    </span>
+                    <span aria-hidden className="text-[10px] text-ink-faint">
+                      {isOpen ? "▲" : "▼"}
+                    </span>
+                  </button>
+
+                  {isOpen && (
+                    <ul className="mt-1 space-y-1 pl-1">
+                      {items.map((c) => {
+                        const active = selected?.id === c.id;
+                        const clock = railClock(c);
+                        const amount = c.awardedAmount ?? c.payout;
+                        return (
+                          <li key={c.id}>
+                            <button
+                              onClick={() => {
+                                setSelectedId(c.id);
+                                // Stacked layout: the dossier is below the whole rail, so
+                                // selecting without moving the viewport looks like nothing
+                                // happened. Desktop shows both panes already.
+                                if (window.innerWidth < 1024) {
+                                  requestAnimationFrame(() =>
+                                    dossierRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
+                                  );
+                                }
+                              }}
+                              aria-current={active ? "true" : undefined}
+                              className={`tap flex w-full items-start gap-2 rounded border-l-2 py-1.5 pl-2 pr-2 text-left transition-colors ${
+                                active
+                                  ? "border-l-up bg-up/10"
+                                  : "border-l-accent/50 bg-panel-2/40 hover:bg-panel-2"
+                              }`}
+                            >
+                              <span className="min-w-0 flex-1">
+                                <span
+                                  className={`block truncate text-[11px] font-bold uppercase tracking-wide ${active ? "text-up" : "text-ink"}`}
+                                >
+                                  {c.visibility === "classified" && <span aria-hidden>▩ </span>}
+                                  {c.title}
+                                </span>
+                                <span className="block truncate text-[10px] uppercase tracking-wider text-ink-faint">
+                                  {c.issuerName ?? "issuer withheld"}
+                                </span>
+                              </span>
+                              <span className="shrink-0 text-right">
+                                <span className={`num block text-[11px] font-bold ${active ? "text-up" : "text-ink-dim"}`}>
+                                  {c.pricingMode === "bid" && c.awardedAmount == null ? "≤" : ""}
+                                  {short(amount)}
+                                </span>
+                                {clock && (
+                                  <span className="num block text-[10px] text-ink-faint" suppressHydrationWarning>
+                                    {clock}
+                                  </span>
+                                )}
+                              </span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
                   )}
-                </span>
+                </div>
+              );
+            })}
+          </nav>
+
+          {/* -------------------------------------------------------------- dossier */}
+          {selected && (
+            <div ref={dossierRef} className="space-y-3 scroll-mt-4">
+              {/* Title bar and the three facts the mobiGlas puts beside it. */}
+              <div className="grid gap-3 xl:grid-cols-[1fr_auto] xl:items-stretch">
+                <div className="flex items-center rounded border border-line bg-panel px-4 py-3">
+                  <h2 className="text-lg font-bold text-ink">{selected.title}</h2>
+                </div>
+                <dl className="rounded border border-line bg-panel px-4 py-3 text-xs xl:min-w-[19rem]">
+                  {[
+                    {
+                      k: selected.awardedAmount != null ? "Awarded" : selected.pricingMode === "bid" ? "Budget ceiling" : "Reward",
+                      v: `${fmt(selected.awardedAmount ?? selected.payout)} aUEC`,
+                    },
+                    {
+                      k: selected.status === "bidding" ? "Bidding closes" : "Contract availability",
+                      v:
+                        selected.status === "bidding" && selected.bidsCloseAt
+                          ? countdown(selected.bidsCloseAt)
+                          : selected.expiresAt
+                            ? timeLeft(selected.expiresAt)
+                            : "—",
+                    },
+                    { k: "Contracted by", v: selected.issuerName ?? "withheld" },
+                  ].map((row) => (
+                    <div key={row.k} className="flex items-baseline justify-between gap-6 py-0.5">
+                      <dt className="text-accent">{row.k}</dt>
+                      <dd className="num text-right text-ink" suppressHydrationWarning>
+                        {row.v}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
               </div>
+
+              <ContractDossier
+                c={selected}
+                signedIn={signedIn}
+                busy={busy}
+                onTake={take}
+                onAct={act}
+                onAcceptAward={acceptAward}
+                onDeclineAward={(id) => respondToAward(id, "decline")}
+                onWithdrawBid={withdrawBid}
+                onRefresh={refresh}
+                onError={setError}
+                onSignIn={() => router.push("/signin")}
+              />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The dossier pane: everything about one contract, laid out as the mobiGlas does it —
+ * DETAILS on the left, PRIMARY OBJECTIVES on the right, the commitment button bottom-right.
+ *
+ * Extracted from the board rather than left inline because the board now renders exactly one
+ * of these instead of a list, and 250 lines of contract body nested inside a category
+ * accordion inside a grid is not something anyone can safely edit later.
+ */
+function ContractDossier({
+  c,
+  signedIn,
+  busy,
+  onTake,
+  onAct,
+  onAcceptAward,
+  onDeclineAward,
+  onWithdrawBid,
+  onRefresh,
+  onError,
+  onSignIn,
+}: {
+  c: ServiceContractDto;
+  signedIn: boolean;
+  busy: string | null;
+  onTake: (c: ServiceContractDto) => void;
+  onAct: (id: string, action: "claim" | "confirm" | "cancel") => void | Promise<void>;
+  onAcceptAward: (c: ServiceContractDto) => void;
+  onDeclineAward: (id: string) => void;
+  onWithdrawBid: (id: string) => void;
+  onRefresh: () => Promise<void> | void;
+  onError: (m: string | null) => void;
+  onSignIn: () => void;
+}) {
+  const act = (id: string, action: "claim" | "confirm" | "cancel") => void onAct(id, action);
+  const refresh = () => void onRefresh();
+  const setError = onError;
+  const take = onTake;
+  const acceptAward = onAcceptAward;
+  const respondToAward = (id: string, action: "accept" | "decline") => {
+    if (action === "decline") onDeclineAward(id);
+  };
+  const withdrawBid = onWithdrawBid;
+  const router = { push: (_: string) => onSignIn() };
+
+  return (
+    <article className="rounded border border-line bg-panel p-4">
+      {/* Status chips. Title and reward now live in the header above, as they do in-game. */}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        {c.category && (
+          <span className="rounded bg-panel-2 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-ink-dim">
+            {CATEGORY_ICON[(c.category as Category) in CATEGORY_ICON ? (c.category as Category) : "other"]} {c.category}
+          </span>
+        )}
+        {c.visibility === "classified" && (
+          <span
+            className="rounded bg-danger/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-danger"
+            title="Details are hidden until someone takes this contract"
+          >
+            ▩ Classified
+          </span>
+        )}
+        {c.pricingMode === "bid" && (
+          <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-accent">
+            ⚖ Out for bid
+          </span>
+        )}
+        {c.awardedAmount != null && (
+          <span className="num text-[10px] text-ink-faint">
+            won at {fmt(c.awardedAmount)} · budget {fmt(c.payout)}
+          </span>
+        )}
+      </div>
+
+      {/*
+       * DETAILS | PRIMARY OBJECTIVES, mirroring the mobiGlas. The divider is a left border on
+       * the second column rather than a separate element, so it collapses cleanly when the
+       * columns stack on a narrow screen.
+       */}
+      <div className="grid gap-5 md:grid-cols-[1fr_minmax(14rem,20rem)]">
+        <section>
+          <h3 className="mb-2 text-sm font-bold uppercase tracking-widest text-ink">Details</h3>
 
               {c.redacted && (
                 <p className="mt-2 rounded border border-dashed border-danger/40 bg-danger/5 px-3 py-2 text-xs text-ink-faint">
@@ -279,9 +586,39 @@ export function ContractBoard({
                     alt={`Reference image for ${c.title}`}
                     loading="lazy"
                     className="max-h-48 rounded border border-line object-contain"
+                    // A contract whose image 404s (deleted upload, bad filename) otherwise
+                    // renders the alt text as broken-image furniture in the middle of the brief.
+                    onError={(e) => {
+                      const link = e.currentTarget.closest("a");
+                      if (link) link.style.display = "none";
+                    }}
                   />
                 </a>
               )}
+
+          {!c.description && !c.redacted && (
+            <p className="text-xs text-ink-faint">No brief was written for this contract.</p>
+          )}
+        </section>
+
+        {/*
+         * PRIMARY OBJECTIVES — in-game this is the checklist of what you must actually do.
+         * Here the equivalent is the state of the agreement: who is party to it, which clock
+         * is running, and what each side still has to do before the payout moves.
+         */}
+        <section className="md:border-l md:border-line md:pl-5">
+          <h3 className="mb-2 text-sm font-bold uppercase tracking-widest text-ink">Primary objectives</h3>
+
+          <ul className="mb-3 space-y-1.5 text-xs">
+            {objectivesFor(c).map((o, i) => (
+              <li key={i} className="flex gap-2">
+                <span aria-hidden className={o.done ? "text-up" : "text-accent"}>
+                  {o.done ? "◆" : "◇"}
+                </span>
+                <span className={o.done ? "text-ink-faint line-through" : "text-ink-dim"}>{o.text}</span>
+              </li>
+            ))}
+          </ul>
 
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-faint">
                 {c.issuerName ? (
@@ -395,8 +732,11 @@ export function ContractBoard({
               {c.visibility === "classified" && c.isIssuer && c.executorId && !c.breach && (
                 <BreachAction id={c.id} action="report" onDone={refresh} onError={setError} />
               )}
+        </section>
+      </div>
 
-              <div className="mt-2 flex flex-wrap items-center gap-2">
+      {/* Commitment sits bottom-right in its own rule, where ACCEPT OFFER does in-game. */}
+      <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3">
                 {c.status === "open" && !c.isIssuer && (
                   <button
                     onClick={() => take(c)}
@@ -444,10 +784,6 @@ export function ContractBoard({
                 )}
               </div>
             </article>
-          ))}
-        </div>
-      )}
-    </div>
   );
 }
 

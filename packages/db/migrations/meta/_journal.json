@@ -134,6 +134,13 @@
       "when": 1785879151005,
       "tag": "0018_market_makers",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1785879548104,
+      "tag": "0019_instalments",
+      "breakpoints": true
     }
   ]
 }

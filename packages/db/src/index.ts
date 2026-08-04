@@ -28,6 +28,8 @@ export * from "./schema/snapshots";
 export * from "./schema/watchlist";
 export * from "./schema/orgs";
 export * from "./schema/market-makers";
+export * from "./schema/instalments";
+export * from "./queries/instalments";
 export * from "./queries/watchlist";
 export * from "./queries/orgs";
 export * from "./queries/market-makers";

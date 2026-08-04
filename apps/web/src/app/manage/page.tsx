@@ -1,9 +1,12 @@
 import {
   getDb,
   listBazaarSales,
+  canUseInstalments,
   listBazaarThreads,
+  listInstalmentPlans,
   listPriceAlerts,
   listWatchlist,
+  type InstalmentPlanDto,
   type BazaarThreadDto,
   type PriceAlertDto,
   type WatchEntryDto,
@@ -47,11 +50,14 @@ export default async function ManagePage() {
   let threads: BazaarThreadDto[] = [];
   let watchlist: WatchEntryDto[] = [];
   let alerts: PriceAlertDto[] = [];
+  let plans: InstalmentPlanDto[] = [];
+  let eligibility: { allowed: boolean; reason: string | null } | null = null;
   let toRate: { saleId: string; counterpartyName: string; title: string }[] = [];
 
   try {
     const db = getDb();
-    [listings, sales, serviceContracts, orders, escrows, threads, watchlist, alerts, toRate] = await Promise.all([
+    [listings, sales, serviceContracts, orders, escrows, threads, watchlist, alerts, plans, eligibility, toRate] =
+      await Promise.all([
       myBazaarListings(db, user.id),
       listBazaarSales(db, user.id),
       listContractsBoard(db, {
@@ -70,6 +76,8 @@ export default async function ManagePage() {
       listBazaarThreads(db, user.id),
       listWatchlist(db, user.id),
       listPriceAlerts(db, user.id),
+      listInstalmentPlans(db, user.id),
+      canUseInstalments(db, user.id),
       pendingBazaarRatings(db, user.id),
     ]);
   } catch (err) {
@@ -96,6 +104,8 @@ export default async function ManagePage() {
         threads={threads}
         watchlist={watchlist}
         alerts={alerts}
+        plans={plans}
+        instalmentEligibility={eligibility}
         pendingRatings={toRate}
       />
     </>

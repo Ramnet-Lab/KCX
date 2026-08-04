@@ -5,6 +5,7 @@ import type {
   BazaarSaleDto,
   BazaarThreadDto,
   ContractDto,
+  InstalmentPlanDto,
   PriceAlertDto,
   ServiceContractDto,
   WatchEntryDto,
@@ -14,11 +15,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { BazaarThreadPanel } from "@/components/bazaar-thread";
+import { InstalmentPanel, ProposeInstalments } from "@/components/instalments";
 import { StarPicker } from "@/components/trader-standing";
 import { WatchlistPanel } from "@/components/watchlist";
 import { fmtAuec, timeLeft } from "@/lib/countdown";
 
-type Tab = "messages" | "selling" | "sales" | "contracts" | "orders" | "watchlist";
+type Tab = "messages" | "selling" | "sales" | "contracts" | "orders" | "watchlist" | "instalments";
 
 /**
  * The trader's own desk.
@@ -36,6 +38,8 @@ export function ManageDesk({
   threads,
   watchlist,
   alerts,
+  plans,
+  instalmentEligibility,
   pendingRatings,
 }: {
   listings: BazaarListingDto[];
@@ -46,6 +50,8 @@ export function ManageDesk({
   threads: BazaarThreadDto[];
   watchlist: WatchEntryDto[];
   alerts: PriceAlertDto[];
+  plans: InstalmentPlanDto[];
+  instalmentEligibility: { allowed: boolean; reason: string | null } | null;
   pendingRatings: { saleId: string; counterpartyName: string; title: string }[];
 }) {
   // Conversations open first when any are waiting: somebody is holding a question, and an
@@ -83,6 +89,14 @@ export function ManageDesk({
     () => ({
       messages: threads.filter((t) => t.unread).length,
       watchlist: alerts.filter((a) => !a.read).length,
+      // A payment waiting on you, or a proposed schedule waiting on your answer.
+      instalments: plans.filter(
+        (p) =>
+          (p.status === "proposed" && !p.proposedByMe) ||
+          (p.status === "active" &&
+            p.nextDue != null &&
+            !(p.isBuyer ? p.nextDue.buyerConfirmed : p.nextDue.sellerConfirmed)),
+      ).length,
       selling: listings.filter((l) => l.status === "active" || l.status === "paused").length,
       sales: sales.filter((s) => s.status === "pending" && !(s.isSeller ? s.sellerConfirmed : s.buyerConfirmed)).length,
       contracts: serviceContracts.filter(
@@ -93,7 +107,7 @@ export function ManageDesk({
         escrows.filter((e) => e.status === "escrow" && !e.iConfirmed).length +
         orders.filter((o) => o.status === "active" || o.status === "paused").length,
     }),
-    [listings, sales, serviceContracts, orders, escrows, threads, alerts],
+    [listings, sales, serviceContracts, orders, escrows, threads, alerts, plans],
   );
 
   const TABS: { id: Tab; label: string; count: number }[] = [
@@ -103,6 +117,7 @@ export function ManageDesk({
     { id: "contracts", label: "Contracts", count: counts.contracts },
     { id: "orders", label: "Market orders", count: counts.orders },
     { id: "watchlist", label: "Watchlist", count: counts.watchlist },
+    { id: "instalments", label: "Instalments", count: counts.instalments },
   ];
 
   return (
@@ -136,6 +151,7 @@ export function ManageDesk({
       {tab === "contracts" && <ContractsTab contracts={serviceContracts} busy={busy} onAct={patch} />}
       {tab === "orders" && <OrdersTab orders={orders} escrows={escrows} busy={busy} onAct={patch} />}
       {tab === "watchlist" && <WatchlistPanel entries={watchlist} alerts={alerts} />}
+      {tab === "instalments" && <InstalmentPanel plans={plans} eligibility={instalmentEligibility} />}
     </div>
   );
 }
@@ -479,6 +495,8 @@ function SaleRow({ sale: s, busy, onAct }: { sale: BazaarSaleDto; busy: string |
           >
             back out
           </button>
+          {/* Only offered on big-ticket sales; the component decides. */}
+          <ProposeInstalments saleId={s.id} totalPrice={s.totalPrice} />
         </div>
       )}
     </article>

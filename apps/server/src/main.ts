@@ -13,6 +13,7 @@ import {
   ensureBootstrapAdmin,
   expireBazaarListings,
   expireBazaarSales,
+  expireInstalments,
   liftExpiredBans,
   expireContractAwards,
   expireServiceContracts,
@@ -190,6 +191,10 @@ async function main() {
     if (lapsedSales > 0) console.log(`[bazaar] ${lapsedSales} sale(s) went unconfirmed → units back on the board`);
     const deadListings = await expireBazaarListings(db);
     if (deadListings > 0) console.log(`[bazaar] ${deadListings} listing(s) ran out of time`);
+    // Instalment plans whose payment has sat past its grace period. Runs before the alert
+    // pass so a defaulted plan's restocked units are already back on the board.
+    const defaults = await expireInstalments(db);
+    if (defaults > 0) console.log(`[instalments] ${defaults} plan(s) defaulted → sale cancelled, record kept`);
     // Alerts run LAST in the sweep, so they see the state everything above just produced —
     // an auction that closed this minute is a settled price, and someone watching that item
     // should hear about it now rather than five minutes later.
