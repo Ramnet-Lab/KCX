@@ -129,7 +129,19 @@ and everything it currently has on the bazaar and in contracts. This is what the
 a listing links to — a buyer looking at "MAIKOHCO wants a Polaris, 40M" needs somewhere to
 click and check whether they settle.
 
-**`/orgs` — members only, and role-based.** What you see depends on your role:
+**`/orgs` — members only, and role-based.** One page with tabs rather than several routes:
+an org is a single thing, and splitting "your org", "what everyone else sees" and "other
+orgs" across three URLs made checking your own public presentation a navigation exercise.
+
+| Tab | What it is |
+|---|---|
+| **Public view** | Your org exactly as an outsider sees it — the *same component* the public route renders, so the preview cannot drift from what counterparties actually get. |
+| **Roster** | Members, RSI ranks, board seats, limits. The president manages from here. |
+| **Board** | Open proposals and, for the president, the threshold and treasury controls. |
+| **Channels** | Correspondence with other orgs. President-only, so the tab isn't offered to anyone else — a tab that only ever explains why you can't use it is a worse answer than no tab. |
+| **Other orgs** | The directory, inline. |
+
+Within those tabs, what you can *do* depends on your role:
 
 | | member | treasurer | president |
 |---|---|---|---|

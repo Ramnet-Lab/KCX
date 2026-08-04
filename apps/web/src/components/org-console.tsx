@@ -1,10 +1,15 @@
 "use client";
 
-import type { OrgDto, OrgMemberDto, OrgProposalDto } from "@kcx/db";
+import type { OrgDto, OrgMemberDto, OrgProposalDto, OrgSummaryDto } from "@kcx/db";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { OrgChannelPanel } from "@/components/org-channels";
+import { OrgDirectory } from "@/components/org-directory";
+import { OrgPublicProfile, type OrgPublicData } from "@/components/org-public-profile";
 import { fmtAuec, timeLeft } from "@/lib/countdown";
+
+type Tab = "overview" | "roster" | "board" | "channels" | "directory";
 
 const ROLE_BLURB: Record<string, string> = {
   president: "Everything. Appoints treasurers, sets the board, sets the treasury.",
@@ -27,6 +32,8 @@ export function OrgConsole({
   members,
   proposals,
   standing,
+  publicData,
+  directory,
 }: {
   orgs: OrgDto[];
   selectedId: string | null;
@@ -34,7 +41,12 @@ export function OrgConsole({
   members: OrgMemberDto[];
   proposals: OrgProposalDto[];
   standing: { completed: number; undertaken: number; completionPct: number | null; volume: number } | null;
+  publicData: OrgPublicData | null;
+  directory: OrgSummaryDto[];
 }) {
+  // A channel link from another org's page lands here — open on the tab it refers to rather
+  // than making them hunt for it.
+  const [tab, setTab] = useState<Tab>(openChannelId ? "channels" : "overview");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [code, setCode] = useState<string | null>(null);
@@ -42,6 +54,16 @@ export function OrgConsole({
 
   const org = orgs.find((o) => o.id === selectedId) ?? orgs[0] ?? null;
   const isPresident = org?.myRole === "president";
+
+  const TABS: { id: Tab; label: string; count?: number }[] = [
+    { id: "overview", label: "Public view" },
+    { id: "roster", label: "Roster", count: members.length },
+    { id: "board", label: "Board", count: proposals.filter((p) => p.status === "open").length },
+    // Channels are the president's alone, so the tab isn't offered to anyone else. A tab
+    // that only ever explains why you can't use it is a worse answer than no tab.
+    ...(isPresident ? [{ id: "channels" as const, label: "Channels" }] : []),
+    { id: "directory", label: "Other orgs" },
+  ];
 
   const patch = async (body: Record<string, unknown>) => {
     if (!org) return null;
@@ -110,11 +132,11 @@ export function OrgConsole({
               className="h-10 w-10 rounded border border-line object-cover"
             />
           )}
-          <div>
+          <div className="min-w-40 flex-1">
             <div className="flex flex-wrap items-baseline gap-2">
-              <a href={`/orgs/${org.sid}`} className="text-base font-bold text-ink hover:text-accent">
+              <Link href={`/orgs/${org.sid}`} className="text-base font-bold text-ink hover:text-accent">
                 {org.name}
-              </a>
+              </Link>
               <span className="rounded bg-panel-2 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-ink-dim">
                 {org.sid}
               </span>
@@ -149,14 +171,16 @@ export function OrgConsole({
             <div>
               <dt className="text-ink-faint">Your limit</dt>
               <dd className="num text-ink">
-                {org.mySpendLimit == null ? (org.myRole === "member" ? "—" : "no cap") : `${fmtAuec(org.mySpendLimit)} aUEC`}
+                {org.mySpendLimit == null
+                  ? org.myRole === "member"
+                    ? "—"
+                    : "no cap"
+                  : `${fmtAuec(org.mySpendLimit)} aUEC`}
               </dd>
             </div>
             <div>
               <dt className="text-ink-faint">Settled</dt>
-              <dd className="num text-ink">
-                {standing ? `${standing.completed}/${standing.undertaken}` : "—"}
-              </dd>
+              <dd className="num text-ink">{standing ? `${standing.completed}/${standing.undertaken}` : "—"}</dd>
             </div>
             <div>
               <dt className="text-ink-faint">Led by</dt>
@@ -164,28 +188,80 @@ export function OrgConsole({
             </div>
           </dl>
         )}
-
-        {isPresident && <PresidentControls org={org} busy={busy} onPatch={patch} />}
       </section>
 
-      {isPresident && org.canTrade && <OrgChannelPanel orgId={org.id} openChannelId={openChannelId} />}
+      <div className="mb-3 flex flex-wrap gap-1 border-b border-line pb-2 text-xs">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`tap rounded px-3 py-1.5 font-bold ${
+              tab === t.id ? "bg-accent/15 text-accent" : "text-ink-faint hover:text-ink-dim"
+            }`}
+          >
+            {t.label}
+            {t.count != null && t.count > 0 && <span className="num ml-1.5 text-ink-dim">{t.count}</span>}
+          </button>
+        ))}
+      </div>
 
-      {proposals.length > 0 && <ProposalList proposals={proposals} onChanged={() => router.refresh()} />}
+      {/* What everyone else sees — the same component the public route renders, so a
+          president previewing it is looking at exactly what counterparties get. */}
+      {tab === "overview" &&
+        (publicData ? (
+          <>
+            <p className="mb-2 rounded border border-dashed border-line px-3 py-1.5 text-[11px] text-ink-faint">
+              Your org as an outsider sees it. No treasury, no roster, no board.
+            </p>
+            <OrgPublicProfile data={publicData} showBackLink={false} />
+          </>
+        ) : (
+          <p className="text-xs text-ink-faint">Nothing public yet.</p>
+        ))}
 
-      <section>
-        <h2 className="mb-2 text-xs font-bold uppercase tracking-wider text-ink-faint">
-          Roster <span className="text-ink-dim">from RSI</span>
-        </h2>
-        <div className="space-y-1">
-          {members.map((m) => (
-            <MemberRow key={m.userId} member={m} canManage={isPresident} busy={busy} onPatch={patch} />
-          ))}
-        </div>
-        <p className="mt-2 text-[11px] text-ink-faint">
-          Nobody is added or removed here. Membership and rank come from each trader&apos;s RSI
-          profile and refresh when they verify their handle.
-        </p>
-      </section>
+      {tab === "roster" && (
+        <section>
+          <div className="space-y-1">
+            {members.map((m) => (
+              <MemberRow key={m.userId} member={m} canManage={isPresident} busy={busy} onPatch={patch} />
+            ))}
+          </div>
+          <p className="mt-2 text-[11px] text-ink-faint">
+            Nobody is added or removed here. Membership and rank come from each trader&apos;s RSI
+            profile and refresh when they verify their handle.
+          </p>
+        </section>
+      )}
+
+      {tab === "board" && (
+        <>
+          {isPresident && (
+            <div className="mb-3 rounded border border-line bg-panel p-4">
+              <PresidentControls org={org} busy={busy} onPatch={patch} />
+            </div>
+          )}
+          {proposals.length > 0 ? (
+            <ProposalList proposals={proposals} onChanged={() => router.refresh()} />
+          ) : (
+            <p className="rounded border border-dashed border-line p-6 text-center text-xs text-ink-faint">
+              Nothing before the board.
+              {org.boardThreshold === 0 && " No approval is required at the moment, so nothing arrives here."}
+            </p>
+          )}
+        </>
+      )}
+
+      {tab === "channels" &&
+        (org.canTrade ? (
+          <OrgChannelPanel orgId={org.id} openChannelId={openChannelId} />
+        ) : (
+          <p className="rounded border border-dashed border-line p-6 text-center text-xs text-ink-faint">
+            Prove this org&apos;s leadership first — the other end needs somebody who can speak for
+            you.
+          </p>
+        ))}
+
+      {tab === "directory" && <OrgDirectory initial={directory} />}
     </div>
   );
 }
