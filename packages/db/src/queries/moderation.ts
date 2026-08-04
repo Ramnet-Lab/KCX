@@ -317,20 +317,30 @@ export { logAction as logModerationAction };
 // ---------------------------------------------------------------- bootstrap
 
 /**
- * Make sure the project owner has moderator powers.
+ * Make sure the project owner holds admin.
  *
  * Runs at every worker boot rather than in a migration, because the account may not exist
- * when migrations run — someone has to sign up first. Only ever promotes a plain `user`, so
- * it can't quietly demote an admin or undo a deliberate change to anyone else.
+ * when migrations run — someone has to sign up first.
+ *
+ * Admin rather than mod because someone has to be able to appoint the first moderators, and
+ * granting the role is deliberately admin-only. Promotes from `user` or `mod`, so it also
+ * upgrades an owner who was bootstrapped under the earlier mod-only behaviour. It is a
+ * no-op once they are admin, and it never touches a banned account.
  */
-export async function ensureBootstrapMod(db: Db, handle: string | undefined): Promise<string | null> {
+export async function ensureBootstrapAdmin(db: Db, handle: string | undefined): Promise<string | null> {
   const target = (handle ?? "").trim().toLowerCase();
   if (!target) return null;
 
   const promoted = await db
     .update(users)
-    .set({ role: "mod" })
-    .where(and(eq(users.handle, target), eq(users.role, "user"), isNull(users.bannedAt)))
+    .set({ role: "admin" })
+    .where(
+      and(
+        eq(users.handle, target),
+        sql`${users.role} IN ('user','mod')`,
+        isNull(users.bannedAt),
+      ),
+    )
     .returning({ handle: users.handle });
   return promoted[0]?.handle ?? null;
 }

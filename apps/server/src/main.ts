@@ -9,7 +9,7 @@ import {
   closeDb,
   expireStaleContracts,
   closeContractBidding,
-  ensureBootstrapMod,
+  ensureBootstrapAdmin,
   expireContractAwards,
   expireServiceContracts,
   runMigrations,
@@ -47,13 +47,15 @@ async function main() {
   await runMigrations();
   await ensureSnapshotInfra();
 
-  // The owner needs moderator powers, but their account may not exist when migrations run —
-  // someone has to sign up first. Checking every boot means it lands whenever they appear.
-  const promoted = await ensureBootstrapMod(getDb(), process.env.BOOTSTRAP_MOD_HANDLE ?? "ramnet").catch((err) => {
-    console.error("[bootstrap-mod]", err instanceof Error ? err.message : err);
+  // The owner needs admin, but their account may not exist when migrations run — someone has
+  // to sign up first. Checking every boot means it lands whenever they appear.
+  // BOOTSTRAP_MOD_HANDLE is the previous name for this, still honoured so an older .env works.
+  const ownerHandle = process.env.BOOTSTRAP_ADMIN_HANDLE ?? process.env.BOOTSTRAP_MOD_HANDLE ?? "ramnet";
+  const promoted = await ensureBootstrapAdmin(getDb(), ownerHandle).catch((err) => {
+    console.error("[bootstrap-admin]", err instanceof Error ? err.message : err);
     return null;
   });
-  if (promoted) console.log(`[bootstrap-mod] granted moderator to ${promoted}`);
+  if (promoted) console.log(`[bootstrap-admin] granted admin to ${promoted}`);
 
   const wsPort = Number(process.env.WS_PORT ?? 4000);
   const corsOrigins = (process.env.WEB_ORIGINS ?? "http://localhost:3000").split(",").map((s) => s.trim());

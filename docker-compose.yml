@@ -44,7 +44,7 @@ services:
       UEX_API_BASE: ${UEX_API_BASE:-https://api.uexcorp.uk/2.0}
       UEX_API_TOKEN: ${UEX_API_TOKEN:-}
       WS_PORT: "4000"
-      BOOTSTRAP_MOD_HANDLE: ${BOOTSTRAP_MOD_HANDLE:-ramnet}
+      BOOTSTRAP_ADMIN_HANDLE: ${BOOTSTRAP_ADMIN_HANDLE:-ramnet}
       WEB_ORIGINS: ${PUBLIC_ORIGIN}
       TZ: UTC
 
