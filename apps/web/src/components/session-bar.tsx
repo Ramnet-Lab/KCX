@@ -44,8 +44,8 @@ export function DeskNavLink() {
       <Link href="/manage" className="hover:text-ink" title="Your listings, contracts and orders">
         My desk
       </Link>
-      <Link href="/orgs" className="hover:text-ink" title="Trade as an org">
-        Orgs
+      <Link href="/orgs" className="hover:text-ink" title="Your org">
+        My org
       </Link>
     </>
   );

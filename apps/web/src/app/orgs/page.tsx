@@ -1,4 +1,5 @@
 import {
+  backfillOrgMembership,
   getDb,
   listMyOrgs,
   listOrgMembers,
@@ -24,10 +25,10 @@ export const metadata: Metadata = { title: "Orgs" };
  * sell together — but until now KCX could only see individuals, so a nine-person operation
  * showed up as nine unrelated traders with no shared money and no shared record.
  */
-export default async function OrgsPage({ searchParams }: { searchParams: Promise<{ id?: string }> }) {
+export default async function OrgsPage({ searchParams }: { searchParams: Promise<{ id?: string; channel?: string }> }) {
   const user = await currentUser();
   if (!user) redirect("/signin");
-  const { id } = await searchParams;
+  const { id, channel } = await searchParams;
 
   let orgs: OrgDto[] = [];
   let members: OrgMemberDto[] = [];
@@ -36,6 +37,9 @@ export default async function OrgsPage({ searchParams }: { searchParams: Promise
 
   try {
     const db = getDb();
+    // Accounts verified before orgs were derived have a main_org_sid and no membership row.
+    // A no-op once it exists, so it costs one indexed read on every other visit.
+    await backfillOrgMembership(db, user.id);
     orgs = await listMyOrgs(db, user.id);
     const selected = orgs.find((o) => o.id === id) ?? orgs[0];
     if (selected) {
@@ -64,6 +68,7 @@ export default async function OrgsPage({ searchParams }: { searchParams: Promise
       <OrgConsole
         orgs={orgs}
         selectedId={id ?? null}
+        openChannelId={channel ?? null}
         members={members}
         proposals={proposals}
         standing={standing}

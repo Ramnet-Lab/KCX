@@ -3,6 +3,8 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import type { Db } from "../client";
 import {
   ORG_PROPOSAL_KINDS,
+  orgChannelMessages,
+  orgChannels,
   orgEvents,
   orgMembers,
   orgProposalApprovals,
@@ -1263,4 +1265,372 @@ export async function orgStanding(db: Db, orgId: string): Promise<OrgStanding> {
     completionPct: undertaken > 0 ? Math.round((completed / undertaken) * 100) : null,
     volume: Number(r?.volume ?? 0),
   };
+}
+
+/* ------------------------------ Public directory ---------------------------- */
+
+export type OrgSummaryDto = {
+  id: string;
+  sid: string;
+  name: string;
+  status: string;
+  logoFilename: string | null;
+  memberCount: number;
+  /** Settled sales the org was a party to, and the aUEC behind them. */
+  completed: number;
+  volume: number;
+  liveListings: number;
+  verified: boolean;
+};
+
+/**
+ * The public org list.
+ *
+ * Deliberately excludes the treasury and the roster — how much an org has and who can spend
+ * it are members' business. What is public is exactly what a counterparty needs in order to
+ * decide whether to deal with them: are they verified, do they trade, and do they settle.
+ *
+ * Unverified orgs are listed too, greyed rather than hidden. An org that exists but has
+ * never proved its leadership is a real fact about the world, and hiding it would make the
+ * directory look like a whitelist.
+ */
+export async function listPublicOrgs(
+  db: Db,
+  opts: { search?: string | null; verifiedOnly?: boolean; limit?: number } = {},
+): Promise<OrgSummaryDto[]> {
+  const search = opts.search?.trim();
+  const rows = await db.execute<{
+    id: string; sid: string; name: string; status: string; logo_filename: string | null;
+    member_count: number; completed: number; volume: string; live_listings: number;
+  }>(sql`
+    SELECT o.id::text, o.sid, o.name, o.status, o.logo_filename,
+           (SELECT count(*)::int FROM org_members m WHERE m.org_id = o.id) AS member_count,
+           coalesce(s.completed, 0)::int AS completed,
+           coalesce(s.volume, 0)::text AS volume,
+           (SELECT count(*)::int FROM bazaar_listings bl
+             WHERE bl.org_id = o.id AND bl.status = 'active') AS live_listings
+    FROM orgs o
+    LEFT JOIN LATERAL (
+      SELECT count(*) FILTER (WHERE status = 'completed') AS completed,
+             sum(total_price) FILTER (WHERE status = 'completed') AS volume
+      FROM bazaar_sales sa
+      WHERE sa.seller_org_id = o.id OR sa.buyer_org_id = o.id
+    ) s ON true
+    WHERE o.status <> 'suspended'
+      ${opts.verifiedOnly ? sql`AND o.status = 'verified'` : sql``}
+      ${search ? sql`AND (o.sid ILIKE ${`%${search}%`} OR o.name ILIKE ${`%${search}%`})` : sql``}
+    -- Verified first, then the ones actually trading. A directory sorted alphabetically
+    -- rates being called "Aardvark Consortium" above being worth dealing with.
+    ORDER BY (o.status = 'verified') DESC,
+             coalesce(s.completed, 0) DESC,
+             (SELECT count(*) FROM org_members m2 WHERE m2.org_id = o.id) DESC,
+             o.name
+    LIMIT ${Math.min(opts.limit ?? 60, 200)}
+  `);
+
+  return rows.rows.map((r) => ({
+    id: r.id,
+    sid: r.sid,
+    name: r.name,
+    status: r.status,
+    logoFilename: r.logo_filename,
+    memberCount: r.member_count,
+    completed: r.completed,
+    volume: Number(r.volume),
+    liveListings: r.live_listings,
+    verified: r.status === "verified",
+  }));
+}
+
+/* ------------------------------- Org channels ------------------------------- */
+
+export const ORG_MESSAGE_MAX = 4000;
+
+export type OrgChannelMessageDto = {
+  id: number;
+  orgId: string;
+  orgSid: string;
+  senderName: string;
+  body: string;
+  isMine: boolean;
+  createdAt: string;
+};
+
+export type OrgChannelDto = {
+  id: string;
+  /** The org on the OTHER end, from the viewer's side. */
+  otherOrgId: string;
+  otherOrgSid: string;
+  otherOrgName: string;
+  otherOrgLogo: string | null;
+  unread: boolean;
+  lastMessageAt: string;
+  createdAt: string;
+  messages: OrgChannelMessageDto[];
+};
+
+/** The canonical ordering the pair's unique index depends on. */
+function orderPair(a: string, b: string): [string, string] {
+  return a < b ? [a, b] : [b, a];
+}
+
+/**
+ * Whether this trader may speak for the org in its channels.
+ *
+ * Presidents only. Inter-org correspondence commits an org to things before any contract
+ * exists, and "who is authorised to say we'll do that" needs one answer, not a committee.
+ * Widening it to the board later is a change here and nowhere else.
+ */
+async function isOrgPresident(db: Db, orgId: string, userId: string): Promise<boolean> {
+  const [org] = await db.select().from(orgs).where(eq(orgs.id, orgId));
+  return !!org && org.charterHolderId === userId && org.status === "verified";
+}
+
+/**
+ * Open a channel to another org, or return the one that already exists.
+ *
+ * Both orgs must be verified. An unverified org has no proven leader, so there is nobody at
+ * the other end who can be said to speak for it — a message sent there would be addressed
+ * to whoever happened to sign up first.
+ */
+export async function openOrgChannel(
+  db: Db,
+  opts: { fromOrgId: string; toOrgId: string; userId: string },
+): Promise<{ ok: true; channelId: string } | { ok: false; error: string }> {
+  if (opts.fromOrgId === opts.toOrgId) return { ok: false, error: "That's your own org." };
+  if (!(await isOrgPresident(db, opts.fromOrgId, opts.userId))) {
+    return { ok: false, error: "Only a verified org's president can open a channel." };
+  }
+  const [target] = await db.select().from(orgs).where(eq(orgs.id, opts.toOrgId));
+  if (!target) return { ok: false, error: "That org doesn't exist." };
+  if (target.status !== "verified") {
+    return {
+      ok: false,
+      error: `${target.sid} hasn't proved its leadership yet, so there's nobody there who can speak for it.`,
+    };
+  }
+
+  const [a, b] = orderPair(opts.fromOrgId, opts.toOrgId);
+  const [existing] = await db
+    .select({ id: orgChannels.id })
+    .from(orgChannels)
+    .where(and(eq(orgChannels.orgAId, a), eq(orgChannels.orgBId, b)));
+  if (existing) return { ok: true, channelId: existing.id };
+
+  const [created] = await db
+    .insert(orgChannels)
+    .values({ orgAId: a, orgBId: b, openedById: opts.userId })
+    .onConflictDoNothing({ target: [orgChannels.orgAId, orgChannels.orgBId] })
+    .returning({ id: orgChannels.id });
+  if (created) return { ok: true, channelId: created.id };
+
+  // Lost a race with the other president opening it from their end.
+  const [raced] = await db
+    .select({ id: orgChannels.id })
+    .from(orgChannels)
+    .where(and(eq(orgChannels.orgAId, a), eq(orgChannels.orgBId, b)));
+  return raced ? { ok: true, channelId: raced.id } : { ok: false, error: "Could not open the channel" };
+}
+
+type ChannelRow = {
+  id: string; org_a_id: string; org_b_id: string;
+  a_sid: string; a_name: string; a_logo: string | null;
+  b_sid: string; b_name: string; b_logo: string | null;
+  last_message_at: string | Date; a_read_at: string | Date | null; b_read_at: string | Date | null;
+  created_at: string | Date;
+};
+
+function toChannelDto(r: ChannelRow, myOrgId: string): OrgChannelDto {
+  const iAmA = r.org_a_id === myOrgId;
+  const readAt = iAmA ? r.a_read_at : r.b_read_at;
+  return {
+    id: r.id,
+    otherOrgId: iAmA ? r.org_b_id : r.org_a_id,
+    otherOrgSid: iAmA ? r.b_sid : r.a_sid,
+    otherOrgName: iAmA ? r.b_name : r.a_name,
+    otherOrgLogo: iAmA ? r.b_logo : r.a_logo,
+    unread: readAt == null || new Date(readAt) < new Date(r.last_message_at),
+    lastMessageAt: new Date(r.last_message_at).toISOString(),
+    createdAt: new Date(r.created_at).toISOString(),
+    messages: [],
+  };
+}
+
+const CHANNEL_SELECT = sql`
+  SELECT c.id::text, c.org_a_id::text, c.org_b_id::text,
+         a.sid AS a_sid, a.name AS a_name, a.logo_filename AS a_logo,
+         b.sid AS b_sid, b.name AS b_name, b.logo_filename AS b_logo,
+         c.last_message_at, c.a_read_at, c.b_read_at, c.created_at
+  FROM org_channels c
+  JOIN orgs a ON a.id = c.org_a_id
+  JOIN orgs b ON b.id = c.org_b_id
+`;
+
+/** Every channel this org is part of, most recently active first. */
+export async function listOrgChannels(db: Db, orgId: string): Promise<OrgChannelDto[]> {
+  const rows = await db.execute<ChannelRow>(sql`
+    ${CHANNEL_SELECT}
+    WHERE c.org_a_id = ${orgId}::uuid OR c.org_b_id = ${orgId}::uuid
+    ORDER BY c.last_message_at DESC
+    LIMIT 100
+  `);
+  return rows.rows.map((r) => toChannelDto(r, orgId));
+}
+
+/**
+ * One channel with its messages.
+ *
+ * Returns null for anyone who isn't the president of one of the two orgs. Private means
+ * private: the id is all that stands between this correspondence and everyone else, and
+ * whether two orgs are even talking is itself a thing they may not want known.
+ */
+export async function getOrgChannel(
+  db: Db,
+  channelId: string,
+  userId: string,
+): Promise<OrgChannelDto | null> {
+  const rows = await db.execute<ChannelRow>(sql`${CHANNEL_SELECT} WHERE c.id = ${channelId}::uuid LIMIT 1`);
+  const row = rows.rows[0];
+  if (!row) return null;
+
+  const myOrgId = (await isOrgPresident(db, row.org_a_id, userId))
+    ? row.org_a_id
+    : (await isOrgPresident(db, row.org_b_id, userId))
+      ? row.org_b_id
+      : null;
+  if (!myOrgId) return null;
+
+  const messages = await db.execute<{
+    id: string; org_id: string; sid: string; sender_name: string; body: string; created_at: string | Date;
+  }>(sql`
+    SELECT m.id::text, m.org_id::text, o.sid, u.display_name AS sender_name, m.body, m.created_at
+    FROM org_channel_messages m
+    JOIN orgs o ON o.id = m.org_id
+    JOIN users u ON u.id = m.sender_id
+    WHERE m.channel_id = ${channelId}::uuid
+    ORDER BY m.created_at ASC, m.id ASC
+    LIMIT 500
+  `);
+
+  const dto = toChannelDto(row, myOrgId);
+  dto.messages = messages.rows.map((m) => ({
+    id: Number(m.id),
+    orgId: m.org_id,
+    orgSid: m.sid,
+    senderName: m.sender_name,
+    body: m.body,
+    isMine: m.org_id === myOrgId,
+    createdAt: new Date(m.created_at).toISOString(),
+  }));
+
+  // Reading it marks it read for this SIDE — the org's unread count, not the president's.
+  const now = new Date();
+  await db
+    .update(orgChannels)
+    .set(row.org_a_id === myOrgId ? { aReadAt: now } : { bReadAt: now })
+    .where(eq(orgChannels.id, channelId));
+
+  return dto;
+}
+
+/** Say something in a channel. Presidents only, on behalf of their org. */
+export async function postOrgChannelMessage(
+  db: Db,
+  opts: { channelId: string; userId: string; body: string },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const body = opts.body.trim().slice(0, ORG_MESSAGE_MAX);
+  if (!body) return { ok: false, error: "Say something first" };
+
+  return db.transaction(async (tx) => {
+    const [c] = await tx.select().from(orgChannels).where(eq(orgChannels.id, opts.channelId)).for("update");
+    if (!c) return { ok: false as const, error: "Channel not found" };
+
+    const myOrgId = (await isOrgPresident(tx as unknown as Db, c.orgAId, opts.userId))
+      ? c.orgAId
+      : (await isOrgPresident(tx as unknown as Db, c.orgBId, opts.userId))
+        ? c.orgBId
+        : null;
+    if (!myOrgId) return { ok: false as const, error: "You don't speak for either org here." };
+
+    const now = new Date();
+    await tx.insert(orgChannelMessages).values({
+      channelId: c.id,
+      orgId: myOrgId,
+      senderId: opts.userId,
+      body,
+    });
+    // Sending is also reading: they have plainly seen everything before their own reply.
+    await tx
+      .update(orgChannels)
+      .set({ lastMessageAt: now, ...(c.orgAId === myOrgId ? { aReadAt: now } : { bReadAt: now }) })
+      .where(eq(orgChannels.id, c.id));
+    return { ok: true as const };
+  });
+}
+
+/** Channels waiting on this org — the badge on the console. */
+export async function unreadOrgChannelCount(db: Db, orgId: string): Promise<number> {
+  const res = await db.execute<{ n: string }>(sql`
+    SELECT count(*)::text AS n FROM org_channels c
+    WHERE (c.org_a_id = ${orgId}::uuid AND (c.a_read_at IS NULL OR c.a_read_at < c.last_message_at))
+       OR (c.org_b_id = ${orgId}::uuid AND (c.b_read_at IS NULL OR c.b_read_at < c.last_message_at))
+  `);
+  return Number(res.rows[0]?.n ?? 0);
+}
+
+/**
+ * Create the org and membership for someone who verified BEFORE the roster existed.
+ *
+ * `syncMembershipFromProfile` only runs on verification, so every account verified before
+ * orgs were derived has `users.main_org_sid` set and no membership row — leaving them
+ * looking org-less on a page whose whole premise is that their profile already told us.
+ *
+ * Rank is left null: it isn't stored on the user, and inventing one would be worse than
+ * admitting we don't know. `presumedLeader` falls through to enlistment date until they
+ * re-verify, which fills it in properly.
+ *
+ * Cheap to call on every page load — it does nothing once the row exists.
+ */
+export async function backfillOrgMembership(db: Db, userId: string): Promise<string | null> {
+  const [user] = await db.select().from(users).where(eq(users.id, userId));
+  const sid = user?.mainOrgSid?.trim().toUpperCase();
+  if (!user || !sid || !user.rsiVerifiedAt) return null;
+
+  const [existing] = await db.select().from(orgMembers).where(eq(orgMembers.userId, userId));
+  if (existing) return existing.orgId;
+
+  return db.transaction(async (tx) => {
+    let [org] = await tx.select().from(orgs).where(eq(orgs.sid, sid));
+    if (!org) {
+      [org] = await tx
+        .insert(orgs)
+        .values({ sid, name: sid, status: "derived" })
+        .onConflictDoNothing({ target: orgs.sid })
+        .returning();
+      if (!org) [org] = await tx.select().from(orgs).where(eq(orgs.sid, sid));
+      if (org) {
+        await tx.insert(orgEvents).values({
+          orgId: org.id,
+          actorId: null,
+          subjectId: userId,
+          type: "discovered",
+          data: { sid, backfilled: true },
+        });
+      }
+    }
+    if (!org) return null;
+
+    await tx
+      .insert(orgMembers)
+      .values({ orgId: org.id, userId, role: "member" })
+      .onConflictDoNothing({ target: [orgMembers.orgId, orgMembers.userId] });
+    await tx.insert(orgEvents).values({
+      orgId: org.id,
+      actorId: null,
+      subjectId: userId,
+      type: "member_joined",
+      data: { backfilled: true },
+    });
+    return org.id;
+  });
 }

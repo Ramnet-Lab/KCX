@@ -407,6 +407,28 @@ CREATE TABLE "service_contracts" (
 	CONSTRAINT "contracts_bid_mode_has_window" CHECK (("service_contracts"."pricing_mode" = 'bid') = ("service_contracts"."bids_close_at" IS NOT NULL))
 );
 --> statement-breakpoint
+CREATE TABLE "org_channel_messages" (
+	"id" bigserial PRIMARY KEY NOT NULL,
+	"channel_id" uuid NOT NULL,
+	"org_id" uuid NOT NULL,
+	"sender_id" uuid NOT NULL,
+	"body" text NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "org_channels" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"org_a_id" uuid NOT NULL,
+	"org_b_id" uuid NOT NULL,
+	"opened_by_id" uuid NOT NULL,
+	"last_message_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"a_read_at" timestamp with time zone,
+	"b_read_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "org_channels_distinct" CHECK ("org_channels"."org_a_id" <> "org_channels"."org_b_id"),
+	CONSTRAINT "org_channels_ordered" CHECK ("org_channels"."org_a_id" < "org_channels"."org_b_id")
+);
+--> statement-breakpoint
 CREATE TABLE "org_events" (
 	"id" bigserial PRIMARY KEY NOT NULL,
 	"org_id" uuid NOT NULL,
@@ -823,6 +845,12 @@ ALTER TABLE "service_contracts" ADD CONSTRAINT "service_contracts_season_id_game
 ALTER TABLE "service_contracts" ADD CONSTRAINT "service_contracts_location_id_locations_id_fk" FOREIGN KEY ("location_id") REFERENCES "public"."locations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "service_contracts" ADD CONSTRAINT "service_contracts_awarded_to_id_users_id_fk" FOREIGN KEY ("awarded_to_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "service_contracts" ADD CONSTRAINT "service_contracts_cancelled_by_id_users_id_fk" FOREIGN KEY ("cancelled_by_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "org_channel_messages" ADD CONSTRAINT "org_channel_messages_channel_id_org_channels_id_fk" FOREIGN KEY ("channel_id") REFERENCES "public"."org_channels"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "org_channel_messages" ADD CONSTRAINT "org_channel_messages_org_id_orgs_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."orgs"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "org_channel_messages" ADD CONSTRAINT "org_channel_messages_sender_id_users_id_fk" FOREIGN KEY ("sender_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "org_channels" ADD CONSTRAINT "org_channels_org_a_id_orgs_id_fk" FOREIGN KEY ("org_a_id") REFERENCES "public"."orgs"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "org_channels" ADD CONSTRAINT "org_channels_org_b_id_orgs_id_fk" FOREIGN KEY ("org_b_id") REFERENCES "public"."orgs"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "org_channels" ADD CONSTRAINT "org_channels_opened_by_id_users_id_fk" FOREIGN KEY ("opened_by_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "org_events" ADD CONSTRAINT "org_events_org_id_orgs_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."orgs"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "org_events" ADD CONSTRAINT "org_events_actor_id_users_id_fk" FOREIGN KEY ("actor_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "org_events" ADD CONSTRAINT "org_events_subject_id_users_id_fk" FOREIGN KEY ("subject_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -923,6 +951,10 @@ CREATE INDEX "contracts_issuer" ON "service_contracts" USING btree ("issuer_id",
 CREATE INDEX "contracts_executor" ON "service_contracts" USING btree ("executor_id","status");--> statement-breakpoint
 CREATE INDEX "contracts_bids_close" ON "service_contracts" USING btree ("bids_close_at");--> statement-breakpoint
 CREATE INDEX "contracts_award_expiry" ON "service_contracts" USING btree ("award_expires_at");--> statement-breakpoint
+CREATE INDEX "org_channel_messages_channel" ON "org_channel_messages" USING btree ("channel_id","created_at");--> statement-breakpoint
+CREATE UNIQUE INDEX "org_channels_pair" ON "org_channels" USING btree ("org_a_id","org_b_id");--> statement-breakpoint
+CREATE INDEX "org_channels_a" ON "org_channels" USING btree ("org_a_id","last_message_at");--> statement-breakpoint
+CREATE INDEX "org_channels_b" ON "org_channels" USING btree ("org_b_id","last_message_at");--> statement-breakpoint
 CREATE INDEX "org_events_org" ON "org_events" USING btree ("org_id","created_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "org_members_once" ON "org_members" USING btree ("org_id","user_id");--> statement-breakpoint
 CREATE INDEX "org_members_user" ON "org_members" USING btree ("user_id");--> statement-breakpoint

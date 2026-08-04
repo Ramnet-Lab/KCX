@@ -161,7 +161,9 @@ export function BazaarDetail({
                           className="h-4 w-4 rounded-sm border border-line"
                         />
                       )}
-                      {l.orgName}
+                      <a href={`/orgs/${l.orgSid}`} className="hover:text-accent">
+                        {l.orgName}
+                      </a>
                       <span className="text-[10px] text-ink-faint">via {l.sellerName}</span>
                     </span>
                   ) : (

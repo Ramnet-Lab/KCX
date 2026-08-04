@@ -341,3 +341,73 @@ export const orgEvents = pgTable(
   },
   (t) => [index("org_events_org").on(t.orgId, t.createdAt)],
 );
+
+/**
+ * A private channel between two orgs.
+ *
+ * The bazaar's threads hang off a listing and connect two people. This connects two ORGS,
+ * about nothing in particular — which is what inter-org work actually looks like before it
+ * becomes a contract: "do you have Quantanium moving through Pyro this week?"
+ *
+ * The channel belongs to the orgs, not to whoever opened it. A president who hands over
+ * leadership hands over the correspondence with it, because an org that loses its diplomatic
+ * history every time its leadership changes has no diplomatic history.
+ *
+ * The pair is stored in a fixed order (lower uuid first) so A→B and B→A are the same row.
+ * Without that you get two channels, each side writing into a different one, and neither
+ * party seeing the other's messages.
+ */
+export const orgChannels = pgTable(
+  "org_channels",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgAId: uuid("org_a_id")
+      .notNull()
+      .references(() => orgs.id),
+    orgBId: uuid("org_b_id")
+      .notNull()
+      .references(() => orgs.id),
+    openedById: uuid("opened_by_id")
+      .notNull()
+      .references(() => users.id),
+    lastMessageAt: timestamp("last_message_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Read state per SIDE, not per person — the org's unread count, not the president's. */
+    aReadAt: timestamp("a_read_at", { withTimezone: true }),
+    bReadAt: timestamp("b_read_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("org_channels_pair").on(t.orgAId, t.orgBId),
+    index("org_channels_a").on(t.orgAId, t.lastMessageAt),
+    index("org_channels_b").on(t.orgBId, t.lastMessageAt),
+    check("org_channels_distinct", sql`${t.orgAId} <> ${t.orgBId}`),
+    /** The canonical ordering the unique index depends on. */
+    check("org_channels_ordered", sql`${t.orgAId} < ${t.orgBId}`),
+  ],
+);
+
+export const orgChannelMessages = pgTable(
+  "org_channel_messages",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    channelId: uuid("channel_id")
+      .notNull()
+      .references(() => orgChannels.id),
+    /** Which org spoke. */
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    /**
+     * Which member typed it.
+     *
+     * Recorded even though the channel is between orgs: an org cannot type, and "who
+     * actually said this on our behalf" is the first question when a deal goes wrong.
+     */
+    senderId: uuid("sender_id")
+      .notNull()
+      .references(() => users.id),
+    body: text("body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("org_channel_messages_channel").on(t.channelId, t.createdAt)],
+);

@@ -113,3 +113,59 @@ Org-controlled listings and contracts carry the org's badge and SID, and read "a
 Constants live in `packages/db/src/queries/orgs.ts`. `pnpm check:orgs` exercises derivation,
 the trade gate, who may claim, the override, staleness, leaving, the board, suspension and
 transfer.
+
+## Pages, and who sees what
+
+Three surfaces, and they draw different lines.
+
+**`/orgs/directory` — public.** Every org with somebody on KCX. Verified badge, member count,
+settled record, volume, and how many listings they have live. No treasury, no roster.
+Unverified orgs are listed and greyed rather than hidden: an org that exists but has not
+proved its leadership is a real fact, and hiding it would make the directory read as a
+whitelist.
+
+**`/orgs/[sid]` — public.** One org: logo, verified state, who leads it, its settled record,
+and everything it currently has on the bazaar and in contracts. This is what the org badge on
+a listing links to — a buyer looking at "MAIKOHCO wants a Polaris, 40M" needs somewhere to
+click and check whether they settle.
+
+**`/orgs` — members only, and role-based.** What you see depends on your role:
+
+| | member | treasurer | president |
+|---|---|---|---|
+| Roster, ranks, org status | ✓ | ✓ | ✓ |
+| Leadership claim (if unverified, and you're the presumed leader) | ✓ | ✓ | ✓ |
+| Treasury figure, your own limit | ✓ | ✓ | ✓ |
+| Board proposals list | ✓ | ✓ | ✓ |
+| Vote on proposals | board seat only | board seat only | board seat only |
+| Spend the treasury | — | up to their limit | uncapped |
+| Set treasury, board rules, roles, limits | — | — | ✓ |
+| Transfer leadership | — | — | ✓ |
+| Inter-org channels | — | — | ✓ |
+
+## Inter-org channels
+
+Private org-to-org correspondence, opened by a president against another **verified** org
+found through the directory. This is where inter-org work happens before it becomes a
+contract.
+
+The channel belongs to the **orgs**, not to whoever opened it, so a president who hands over
+leadership hands over the correspondence with it — an org that loses its diplomatic history
+every time leadership changes has no diplomatic history. Read state is per side, not per
+person: it is the org's unread count.
+
+Presidents only. A channel commits an org to things before any contract exists, and "who may
+say we'll do that" needs one answer rather than a committee. Each message still records which
+member typed it — an org cannot type, and that is the first question asked when a deal goes
+wrong. Widening it to board members later is a change in one function.
+
+Both ends must be verified. An unverified org has no proven leader, so a message sent there
+would be addressed to whoever happened to sign up first.
+
+## Backfill
+
+`syncMembershipFromProfile` only runs on RSI verification, so accounts verified before orgs
+were derived had `users.main_org_sid` set and no membership row — leaving them looking
+org-less on a page whose whole premise is that their profile already told us.
+`backfillOrgMembership` fixes that lazily on page load, and is a no-op once the row exists.
+Rank is left null rather than invented; re-verifying fills it in.

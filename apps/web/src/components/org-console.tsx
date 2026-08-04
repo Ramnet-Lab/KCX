@@ -3,6 +3,7 @@
 import type { OrgDto, OrgMemberDto, OrgProposalDto } from "@kcx/db";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { OrgChannelPanel } from "@/components/org-channels";
 import { fmtAuec, timeLeft } from "@/lib/countdown";
 
 const ROLE_BLURB: Record<string, string> = {
@@ -22,12 +23,14 @@ const ROLE_BLURB: Record<string, string> = {
 export function OrgConsole({
   orgs,
   selectedId,
+  openChannelId,
   members,
   proposals,
   standing,
 }: {
   orgs: OrgDto[];
   selectedId: string | null;
+  openChannelId?: string | null;
   members: OrgMemberDto[];
   proposals: OrgProposalDto[];
   standing: { completed: number; undertaken: number; completionPct: number | null; volume: number } | null;
@@ -109,7 +112,9 @@ export function OrgConsole({
           )}
           <div>
             <div className="flex flex-wrap items-baseline gap-2">
-              <h2 className="text-base font-bold text-ink">{org.name}</h2>
+              <a href={`/orgs/${org.sid}`} className="text-base font-bold text-ink hover:text-accent">
+                {org.name}
+              </a>
               <span className="rounded bg-panel-2 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-ink-dim">
                 {org.sid}
               </span>
@@ -162,6 +167,8 @@ export function OrgConsole({
 
         {isPresident && <PresidentControls org={org} busy={busy} onPatch={patch} />}
       </section>
+
+      {isPresident && org.canTrade && <OrgChannelPanel orgId={org.id} openChannelId={openChannelId} />}
 
       {proposals.length > 0 && <ProposalList proposals={proposals} onChanged={() => router.refresh()} />}
 

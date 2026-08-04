@@ -1,5 +1,5 @@
 {
-  "id": "63625108-6dad-4560-8176-7b3334a69f6c",
+  "id": "2f370b0c-0b58-4f0c-9890-8f46e03bd1e4",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -3859,6 +3859,295 @@
         "contracts_bid_mode_has_window": {
           "name": "contracts_bid_mode_has_window",
           "value": "(\"service_contracts\".\"pricing_mode\" = 'bid') = (\"service_contracts\".\"bids_close_at\" IS NOT NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.org_channel_messages": {
+      "name": "org_channel_messages",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigserial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "channel_id": {
+          "name": "channel_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "org_id": {
+          "name": "org_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sender_id": {
+          "name": "sender_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "body": {
+          "name": "body",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "org_channel_messages_channel": {
+          "name": "org_channel_messages_channel",
+          "columns": [
+            {
+              "expression": "channel_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "org_channel_messages_channel_id_org_channels_id_fk": {
+          "name": "org_channel_messages_channel_id_org_channels_id_fk",
+          "tableFrom": "org_channel_messages",
+          "tableTo": "org_channels",
+          "columnsFrom": [
+            "channel_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "org_channel_messages_org_id_orgs_id_fk": {
+          "name": "org_channel_messages_org_id_orgs_id_fk",
+          "tableFrom": "org_channel_messages",
+          "tableTo": "orgs",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "org_channel_messages_sender_id_users_id_fk": {
+          "name": "org_channel_messages_sender_id_users_id_fk",
+          "tableFrom": "org_channel_messages",
+          "tableTo": "users",
+          "columnsFrom": [
+            "sender_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.org_channels": {
+      "name": "org_channels",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "org_a_id": {
+          "name": "org_a_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "org_b_id": {
+          "name": "org_b_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "opened_by_id": {
+          "name": "opened_by_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "last_message_at": {
+          "name": "last_message_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "a_read_at": {
+          "name": "a_read_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "b_read_at": {
+          "name": "b_read_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "org_channels_pair": {
+          "name": "org_channels_pair",
+          "columns": [
+            {
+              "expression": "org_a_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "org_b_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "org_channels_a": {
+          "name": "org_channels_a",
+          "columns": [
+            {
+              "expression": "org_a_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "last_message_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "org_channels_b": {
+          "name": "org_channels_b",
+          "columns": [
+            {
+              "expression": "org_b_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "last_message_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "org_channels_org_a_id_orgs_id_fk": {
+          "name": "org_channels_org_a_id_orgs_id_fk",
+          "tableFrom": "org_channels",
+          "tableTo": "orgs",
+          "columnsFrom": [
+            "org_a_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "org_channels_org_b_id_orgs_id_fk": {
+          "name": "org_channels_org_b_id_orgs_id_fk",
+          "tableFrom": "org_channels",
+          "tableTo": "orgs",
+          "columnsFrom": [
+            "org_b_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "org_channels_opened_by_id_users_id_fk": {
+          "name": "org_channels_opened_by_id_users_id_fk",
+          "tableFrom": "org_channels",
+          "tableTo": "users",
+          "columnsFrom": [
+            "opened_by_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "org_channels_distinct": {
+          "name": "org_channels_distinct",
+          "value": "\"org_channels\".\"org_a_id\" <> \"org_channels\".\"org_b_id\""
+        },
+        "org_channels_ordered": {
+          "name": "org_channels_ordered",
+          "value": "\"org_channels\".\"org_a_id\" < \"org_channels\".\"org_b_id\""
         }
       },
       "isRLSEnabled": false

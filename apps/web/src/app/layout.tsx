@@ -38,6 +38,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/bazaar" className="hover:text-ink">
                 Bazaar
               </Link>
+              <Link href="/orgs/directory" className="hover:text-ink">
+                Orgs
+              </Link>
               <DeskNavLink />
               <ModNavLink />
               <SessionBar />
