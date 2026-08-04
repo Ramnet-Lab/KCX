@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { SessionBar } from "@/components/session-bar";
+import { ModNavLink, SessionBar } from "@/components/session-bar";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -35,6 +35,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/contracts" className="hover:text-ink">
                 Contracts
               </Link>
+              <ModNavLink />
               <SessionBar />
             </nav>
           </div>

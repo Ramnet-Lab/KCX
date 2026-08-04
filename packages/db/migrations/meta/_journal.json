@@ -57,6 +57,13 @@
       "when": 1785861560029,
       "tag": "0007_sudden_tempest",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1785862390594,
+      "tag": "0008_smooth_eddie_brock",
+      "breakpoints": true
     }
   ]
 }

@@ -25,7 +25,13 @@ export default defineConfig({
   // market.ts only — snapshots.ts describes a partitioned table that drizzle-kit cannot
   // create correctly; its DDL is owned by apps/server jobs/partitions.ts. The filter
   // keeps push/generate from ever prompting about (or dropping) those tables.
-  schema: ["./src/schema/market.ts", "./src/schema/orders.ts", "./src/schema/auth.ts", "./src/schema/contracts.ts"],
+  schema: [
+    "./src/schema/market.ts",
+    "./src/schema/orders.ts",
+    "./src/schema/auth.ts",
+    "./src/schema/contracts.ts",
+    "./src/schema/moderation.ts",
+  ],
   out: "./migrations",
   dbCredentials: { url },
   tablesFilter: ["!uex_price_snapshots", "!uex_price_snapshots_*"],

@@ -10,7 +10,26 @@ export type SessionUser = {
   displayName: string;
   isVerified: boolean;
   avatarUrl: string | null;
+  role: string;
 };
+
+/**
+ * Moderator entry point in the header.
+ *
+ * Rendered from the session rather than a server layout read, so the layout stays static and
+ * every page doesn't pay for a database round trip. This only hides the link — /admin and
+ * every admin API check the role server-side, so a forged session shape gains nothing.
+ */
+export function ModNavLink() {
+  const { user, loaded } = useSession();
+  if (!loaded || !user) return null;
+  if (user.role !== "mod" && user.role !== "admin") return null;
+  return (
+    <Link href="/admin" className="font-bold text-danger hover:text-ink" title="Moderation">
+      Admin
+    </Link>
+  );
+}
 
 let cached: Promise<{ user: SessionUser | null; devLoginEnabled: boolean }> | null = null;
 function fetchSession() {

@@ -1,6 +1,7 @@
 import { and, asc, eq, lte, sql } from "drizzle-orm";
 import type { Db } from "../client";
 import { contractBids, contractBreaches, contractEvents, contractRatings, serviceContracts } from "../schema/contracts";
+import { moderationActions } from "../schema/moderation";
 import { users } from "../schema/orders";
 
 /**
@@ -785,7 +786,7 @@ export async function disputeContractBreach(
 /** Moderator ruling. Dismissing stops it counting; upholding settles it. */
 export async function resolveContractBreach(
   db: Db,
-  opts: { contractId: string; moderatorId: string; action: "uphold" | "dismiss" },
+  opts: { contractId: string; moderatorId: string; action: "uphold" | "dismiss"; reason?: string | null },
 ): Promise<ServiceContractResult> {
   return db.transaction(async (tx) => {
     const [b] = await tx
@@ -811,6 +812,16 @@ export async function resolveContractBreach(
       actorId: opts.moderatorId,
       type: opts.action === "uphold" ? "breach_upheld" : "breach_dismissed",
       data: {},
+    });
+    // Same transaction as the ruling — a moderation log that can drift from what actually
+    // happened reads as authoritative while being wrong.
+    await tx.insert(moderationActions).values({
+      moderatorId: opts.moderatorId,
+      action: opts.action === "uphold" ? "breach_upheld" : "breach_dismissed",
+      targetType: "breach",
+      targetId: opts.contractId,
+      targetUserId: b.accusedId,
+      reason: opts.reason ?? null,
     });
     return { ok: true as const };
   });

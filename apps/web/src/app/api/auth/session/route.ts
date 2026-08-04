@@ -15,6 +15,7 @@ export async function GET() {
           displayName: user.displayName,
           isVerified: user.isVerified,
           avatarUrl: user.avatarUrl,
+          role: user.role,
         }
       : null,
   });
