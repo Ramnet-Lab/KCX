@@ -37,6 +37,37 @@ function changeBadge(entry: TickerEntry) {
   );
 }
 
+/**
+ * The two NPC prices with the systems they're in.
+ *
+ * The system rather than the terminal because it fits, and because "Pyro / Stanton" makes the
+ * point instantly: these are not two sides of a spread you can capture, they are two prices
+ * in two places. `bestSell` is a universe-wide max and `bestBuy` a universe-wide min, so
+ * they're rarely even on the same planet. The full terminal names are in the tooltip.
+ */
+function npcLine(entry: TickerEntry, compact: boolean) {
+  const where = (terminal: string | null, system: string | null) =>
+    terminal ? `${terminal}${system ? ` · ${system}` : ""}` : "unknown terminal";
+  const title =
+    `Best NPC payout ${fmt(entry.bestSell)} at ${where(entry.bestSellTerminal, entry.bestSellSystem)}\n` +
+    `Cheapest NPC purchase ${fmt(entry.bestBuy)} at ${where(entry.bestBuyTerminal, entry.bestBuySystem)}` +
+    (entry.npcSplit ? "\n\nDifferent systems — reaching either price costs a trip." : "");
+  const sys = (s: string | null) => (s && !compact ? <span className="text-ink-faint/70"> {s}</span> : null);
+
+  return (
+    <span className="num text-xs text-ink-faint" title={title}>
+      npc {fmt(entry.bestSell)}
+      {sys(entry.bestSellSystem)} / {fmt(entry.bestBuy)}
+      {sys(entry.bestBuySystem)}
+      {entry.npcSplit && (
+        <span className="ml-1 text-ink-faint/70" title="These two prices are in different systems">
+          ⇄
+        </span>
+      )}
+    </span>
+  );
+}
+
 /** Small badge explaining where a tile's headline price came from. */
 function sourceBadge(entry: TickerEntry) {
   if (entry.priceSource !== "player") return null;
@@ -372,9 +403,7 @@ export function TickerWall({ entries, lastUpdate, flash, onPlaceOrder }: Props) 
               </div>
               <div className="flex items-center justify-between">
                 {/* NPC edges stay visible as context — they're the chart's reference line. */}
-                <span className="num text-xs text-ink-faint" title="NPC terminal sell-to / buy-from">
-                  npc {fmt(e.bestSell)}/{fmt(e.bestBuy)}
-                </span>
+                {npcLine(e, true)}
                 <TradeButtons commodityId={e.commodityId} compact />
               </div>
               {assignMenuFor === e.commodityId && <AssignMenu commodityId={e.commodityId} />}
@@ -413,8 +442,15 @@ export function TickerWall({ entries, lastUpdate, flash, onPlaceOrder }: Props) 
                       {sourceBadge(e)}
                     </span>
                   </td>
-                  <td className="num px-3 py-1.5 text-right text-ink-dim">
-                    {fmt(e.bestSell)} / {fmt(e.bestBuy)}
+                  <td className="px-3 py-1.5 text-right text-ink-dim">
+                    <span className="num">
+                      {fmt(e.bestSell)} / {fmt(e.bestBuy)}
+                    </span>
+                    <div className="text-[10px] text-ink-faint">
+                      {e.bestSellSystem ?? "—"}
+                      {e.npcSplit ? " ⇄ " : " / "}
+                      {e.bestBuySystem ?? "—"}
+                    </div>
                   </td>
                   <td className="px-3 py-1.5 text-right">{changeBadge(e)}</td>
                   <td className="px-3 py-1.5">

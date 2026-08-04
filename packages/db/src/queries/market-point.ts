@@ -29,6 +29,10 @@ const MARKS_SELECT = sql`
   m.commodity_id,
   m.best_sell,
   m.best_buy,
+  m.best_sell_terminal,
+  m.best_sell_system,
+  m.best_buy_terminal,
+  m.best_buy_system,
   m.sell_terminals,
   m.buy_terminals,
   m.player_mark,
@@ -39,6 +43,21 @@ const MARKS_SELECT = sql`
   m.pairs
 `;
 
+const MARKS_COLUMNS = sql.raw(`
+  (commodity_id, best_sell, best_buy,
+   best_sell_terminal, best_sell_system, best_buy_terminal, best_buy_system,
+   sell_terminals, buy_terminals,
+   mark_price, last_price, last_traded_at, window_volume_scu, window_print_count, window_pairs, updated_at)
+`);
+
+/*
+ * A note on the system lookup used below: star systems are the only roots in `locations`
+ * (96 of them, all type `star_system`), so walking a terminal's location up to its root
+ * yields the system name. It's carried separately from the terminal name because it's short
+ * enough for a ticker tile, and "Pyro" beside "Stanton" tells a trader those two NPC prices
+ * are not a spread far more directly than two terminal names would.
+ */
+
 /**
  * Full capture across every tradable commodity — the poll's write, run inside the ingest
  * transaction so a capture is all-or-nothing.
@@ -48,13 +67,28 @@ const MARKS_SELECT = sql`
  */
 export async function captureAllMarks(tx: Exec, capturedAt: Date): Promise<void> {
   await tx.execute(sql`
-    WITH baseline AS (
+    WITH RECURSIVE roots AS (
+      SELECT id, name AS system_name FROM locations WHERE parent_id IS NULL
+      UNION ALL
+      SELECT l.id, r.system_name FROM locations l JOIN roots r ON l.parent_id = r.id
+    ),
+    term AS (
+      SELECT t.id, t.name, r.system_name
+      FROM terminals t LEFT JOIN roots r ON r.id = t.location_id
+    ),
+    baseline AS (
       SELECT
         commodity_id,
         max(nullif(price_sell, 0)) AS best_sell,
         min(nullif(price_buy, 0))  AS best_buy,
         count(*) FILTER (WHERE nullif(price_sell, 0) IS NOT NULL) AS sell_terminals,
-        count(*) FILTER (WHERE nullif(price_buy, 0) IS NOT NULL)  AS buy_terminals
+        count(*) FILTER (WHERE nullif(price_buy, 0) IS NOT NULL)  AS buy_terminals,
+        -- Which terminal is actually offering the best price. FILTERed so a commodity with
+        -- no sell side doesn't get handed an arbitrary terminal by the ordering.
+        (array_agg(terminal_id ORDER BY nullif(price_sell, 0) DESC)
+           FILTER (WHERE nullif(price_sell, 0) IS NOT NULL))[1] AS best_sell_terminal_id,
+        (array_agg(terminal_id ORDER BY nullif(price_buy, 0) ASC)
+           FILTER (WHERE nullif(price_buy, 0) IS NOT NULL))[1]  AS best_buy_terminal_id
       FROM terminal_prices_latest
       GROUP BY commodity_id
     ),
@@ -64,6 +98,10 @@ export async function captureAllMarks(tx: Exec, capturedAt: Date): Promise<void>
         c.id AS commodity_id,
         b.best_sell,
         b.best_buy,
+        ts.name        AS best_sell_terminal,
+        ts.system_name AS best_sell_system,
+        tb.name        AS best_buy_terminal,
+        tb.system_name AS best_buy_system,
         coalesce(b.sell_terminals, 0) AS sell_terminals,
         coalesce(b.buy_terminals, 0)  AS buy_terminals,
         ${playerMarkExpr("s")} AS player_mark,
@@ -74,6 +112,8 @@ export async function captureAllMarks(tx: Exec, capturedAt: Date): Promise<void>
         coalesce(s.pairs, 0)       AS pairs
       FROM commodities c
       LEFT JOIN baseline b ON b.commodity_id = c.id
+      LEFT JOIN term ts ON ts.id = b.best_sell_terminal_id
+      LEFT JOIN term tb ON tb.id = b.best_buy_terminal_id
       LEFT JOIN s ON s.commodity_id = c.id
       WHERE c.is_tradable
     ),
@@ -87,13 +127,15 @@ export async function captureAllMarks(tx: Exec, capturedAt: Date): Promise<void>
       ON CONFLICT (commodity_id, captured_at) DO NOTHING
       RETURNING 1
     )
-    INSERT INTO commodity_marks_latest
-      (commodity_id, best_sell, best_buy, sell_terminals, buy_terminals,
-       mark_price, last_price, last_traded_at, window_volume_scu, window_print_count, window_pairs, updated_at)
+    INSERT INTO commodity_marks_latest ${MARKS_COLUMNS}
     SELECT ${MARKS_SELECT}, ${capturedAt} FROM m
     ON CONFLICT (commodity_id) DO UPDATE SET
       best_sell          = excluded.best_sell,
       best_buy           = excluded.best_buy,
+      best_sell_terminal = excluded.best_sell_terminal,
+      best_sell_system   = excluded.best_sell_system,
+      best_buy_terminal  = excluded.best_buy_terminal,
+      best_buy_system    = excluded.best_buy_system,
       sell_terminals     = excluded.sell_terminals,
       buy_terminals      = excluded.buy_terminals,
       mark_price         = excluded.mark_price,
@@ -125,6 +167,12 @@ export async function refreshCommodityMark(tx: Exec, commodityId: number, at: Da
         c.id AS commodity_id,
         l.best_sell,
         l.best_buy,
+        -- Carried through untouched: the poll owns these columns, this path owns the player
+        -- ones. Re-selecting them keeps the INSERT column list identical for both writers.
+        l.best_sell_terminal,
+        l.best_sell_system,
+        l.best_buy_terminal,
+        l.best_buy_system,
         coalesce(l.sell_terminals, 0) AS sell_terminals,
         coalesce(l.buy_terminals, 0)  AS buy_terminals,
         ${playerMarkExpr("s")} AS player_mark,
@@ -150,9 +198,7 @@ export async function refreshCommodityMark(tx: Exec, commodityId: number, at: Da
         print_count  = excluded.print_count
       RETURNING 1
     )
-    INSERT INTO commodity_marks_latest
-      (commodity_id, best_sell, best_buy, sell_terminals, buy_terminals,
-       mark_price, last_price, last_traded_at, window_volume_scu, window_print_count, window_pairs, updated_at)
+    INSERT INTO commodity_marks_latest ${MARKS_COLUMNS}
     SELECT ${MARKS_SELECT}, ${at} FROM m
     ON CONFLICT (commodity_id) DO UPDATE SET
       mark_price         = excluded.mark_price,

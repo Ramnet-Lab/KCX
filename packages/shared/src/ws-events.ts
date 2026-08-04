@@ -23,6 +23,20 @@ export type TickerEntry = {
   /** Cheapest NPC buy-from price right now. */
   bestBuy: number | null;
   /**
+   * Where those two NPC prices actually are.
+   *
+   * `bestSell` is a universe-wide max and `bestBuy` a universe-wide min, so they are usually
+   * at different terminals and often in different systems. Shown without a location they
+   * read as a spread a trader could capture; shown with one they read as what they are —
+   * two prices in two places, each costing a trip to reach.
+   */
+  bestSellTerminal: string | null;
+  bestSellSystem: string | null;
+  bestBuyTerminal: string | null;
+  bestBuySystem: string | null;
+  /** True when the two NPC prices aren't even in the same system. */
+  npcSplit: boolean;
+  /**
    * KCX mark — the player price. Null until this commodity has ever had a qualifying fill;
    * once it has, the NPC baseline never takes the headline back.
    */

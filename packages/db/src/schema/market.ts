@@ -151,6 +151,22 @@ export const commodityMarksLatest = pgTable("commodity_marks_latest", {
   /** NPC baseline, refreshed every poll — the seed price and the chart's reference line. */
   bestSell: numeric("best_sell", { precision: 12, scale: 2 }),
   bestBuy: numeric("best_buy", { precision: 12, scale: 2 }),
+  /**
+   * WHERE those two prices are. Denormalised on purpose.
+   *
+   * `best_sell` is a max and `best_buy` a min across every terminal in the universe, so the
+   * two are almost never in the same place — frequently not even the same system. Printing
+   * them side by side with no location implies a spread a trader could capture, when
+   * realising either number costs a trip. It also quietly flatters the terminals in any
+   * comparison against a player price, which is delivered where the trader already is.
+   *
+   * Resolving these at read time would mean a recursive walk up a 675-row location tree on
+   * every ticker call. This table is a snapshot; carrying the label is what it's for.
+   */
+  bestSellTerminal: text("best_sell_terminal"),
+  bestSellSystem: text("best_sell_system"),
+  bestBuyTerminal: text("best_buy_terminal"),
+  bestBuySystem: text("best_buy_system"),
   sellTerminals: integer("sell_terminals").notNull().default(0),
   buyTerminals: integer("buy_terminals").notNull().default(0),
   /**

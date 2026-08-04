@@ -26,6 +26,10 @@ export async function tickerEntries(db: Db): Promise<TickerEntry[]> {
     is_illegal: boolean;
     best_sell: string | null;
     best_buy: string | null;
+    best_sell_terminal: string | null;
+    best_sell_system: string | null;
+    best_buy_terminal: string | null;
+    best_buy_system: string | null;
     mark_price: string | null;
     last_price: string | null;
     last_traded_at: Date | string | null;
@@ -40,6 +44,10 @@ export async function tickerEntries(db: Db): Promise<TickerEntry[]> {
       c.slug, c.code, c.name, c.is_illegal,
       m.best_sell::text,
       m.best_buy::text,
+      m.best_sell_terminal,
+      m.best_sell_system,
+      m.best_buy_terminal,
+      m.best_buy_system,
       m.mark_price::text,
       m.last_price::text,
       m.last_traded_at,
@@ -101,6 +109,14 @@ export async function tickerEntries(db: Db): Promise<TickerEntry[]> {
       isIllegal: r.is_illegal,
       bestSell,
       bestBuy,
+      bestSellTerminal: r.best_sell_terminal,
+      bestSellSystem: r.best_sell_system,
+      bestBuyTerminal: r.best_buy_terminal,
+      bestBuySystem: r.best_buy_system,
+      // Only a split when we actually know both systems — two nulls are ignorance, not a
+      // claim that the prices are in the same place.
+      npcSplit:
+        r.best_sell_system != null && r.best_buy_system != null && r.best_sell_system !== r.best_buy_system,
       markPrice,
       lastPrice: num(r.last_price),
       lastTradedAt,

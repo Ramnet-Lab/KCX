@@ -12,19 +12,47 @@ export const metadata: Metadata = {
 // Live market data: never prerender at build time, when the database is empty.
 export const dynamic = "force-dynamic";
 
-type Mark = { price: number; pairs: number };
+type Mark = {
+  price: number | null;
+  pairs: number;
+  sellTerminal: string | null;
+  sellSystem: string | null;
+  buyTerminal: string | null;
+  buySystem: string | null;
+};
 
 /**
- * Player mark per commodity. Null in the marks table means the commodity has never had a
- * qualifying fill and is still on its NPC seed price — the row simply isn't in this map.
+ * Per-commodity market state: the player mark (null while a commodity is still on its NPC
+ * seed) plus where each NPC price physically is.
  */
 async function loadMarks(): Promise<Map<number, Mark>> {
-  const rows = await getDb().execute<{ commodity_id: number; mark: string | null; pairs: number }>(sql`
-    SELECT commodity_id, mark_price::text AS mark, window_pairs AS pairs
+  const rows = await getDb().execute<{
+    commodity_id: number;
+    mark: string | null;
+    pairs: number;
+    sell_terminal: string | null;
+    sell_system: string | null;
+    buy_terminal: string | null;
+    buy_system: string | null;
+  }>(sql`
+    SELECT commodity_id, mark_price::text AS mark, window_pairs AS pairs,
+           best_sell_terminal AS sell_terminal, best_sell_system AS sell_system,
+           best_buy_terminal  AS buy_terminal,  best_buy_system  AS buy_system
     FROM commodity_marks_latest
-    WHERE mark_price IS NOT NULL
   `);
-  return new Map(rows.rows.map((r) => [r.commodity_id, { price: Number(r.mark), pairs: Number(r.pairs ?? 0) }]));
+  return new Map(
+    rows.rows.map((r) => [
+      r.commodity_id,
+      {
+        price: r.mark != null ? Number(r.mark) : null,
+        pairs: Number(r.pairs ?? 0),
+        sellTerminal: r.sell_terminal,
+        sellSystem: r.sell_system,
+        buyTerminal: r.buy_terminal,
+        buySystem: r.buy_system,
+      },
+    ]),
+  );
 }
 
 function loadRows() {
@@ -66,15 +94,22 @@ export default async function CommoditiesPage() {
       const npcSell = r.bestSell != null ? Number(r.bestSell) : null;
       const npcBuy = r.bestBuy != null ? Number(r.bestBuy) : null;
       const mark = marks.get(r.id) ?? null;
+      const playerPrice = mark?.price ?? null;
       return {
         ...r,
         npcSell,
         npcBuy,
         // Once a commodity has traded, the players set its price. The terminal numbers stay
         // on the row as context rather than competing to be the headline.
-        price: mark?.price ?? npcSell,
-        priceSource: mark ? ("player" as const) : ("npc" as const),
-        thin: mark != null && mark.pairs < MARK_CONFIDENT_PAIRS,
+        price: playerPrice ?? npcSell,
+        priceSource: playerPrice != null ? ("player" as const) : ("npc" as const),
+        thin: playerPrice != null && (mark?.pairs ?? 0) < MARK_CONFIDENT_PAIRS,
+        sellAt: mark?.sellTerminal ?? null,
+        sellSystem: mark?.sellSystem ?? null,
+        buyAt: mark?.buyTerminal ?? null,
+        buySystem: mark?.buySystem ?? null,
+        npcSplit:
+          mark?.sellSystem != null && mark?.buySystem != null && mark.sellSystem !== mark.buySystem,
       };
     });
 
@@ -104,7 +139,7 @@ export default async function CommoditiesPage() {
               <th className="px-3 py-2">Commodity</th>
               <th className="px-3 py-2">Kind</th>
               <th className="px-3 py-2 text-right">Mark</th>
-              <th className="px-3 py-2 text-right">NPC sell / buy</th>
+              <th className="px-3 py-2 text-right">NPC sell-to / buy-from · where</th>
               <th className="px-3 py-2 text-right">Sell / buy terms.</th>
               <th className="px-3 py-2 text-right">Updated</th>
             </tr>
@@ -137,9 +172,35 @@ export default async function CommoditiesPage() {
                     </span>
                   )}
                 </td>
-                <td className="num px-3 py-2 text-right text-ink-dim">
-                  {fmtAuec(r.npcSell != null ? String(r.npcSell) : null)} /{" "}
-                  {fmtAuec(r.npcBuy != null ? String(r.npcBuy) : null)}
+                {/*
+                  Each NPC price with the terminal offering it. These are a universe-wide max
+                  and a universe-wide min, so they are two prices in two places — not a spread
+                  anyone can capture without flying between them.
+                */}
+                <td className="px-3 py-2 text-right">
+                  <div className="num text-ink-dim">
+                    {fmtAuec(r.npcSell != null ? String(r.npcSell) : null)}
+                    {r.sellAt && (
+                      <span className="ml-1 text-[10px] text-ink-faint">
+                        @ {r.sellAt}
+                        {r.sellSystem ? ` · ${r.sellSystem}` : ""}
+                      </span>
+                    )}
+                  </div>
+                  <div className="num text-ink-dim">
+                    {fmtAuec(r.npcBuy != null ? String(r.npcBuy) : null)}
+                    {r.buyAt && (
+                      <span className="ml-1 text-[10px] text-ink-faint">
+                        @ {r.buyAt}
+                        {r.buySystem ? ` · ${r.buySystem}` : ""}
+                      </span>
+                    )}
+                  </div>
+                  {r.npcSplit && (
+                    <div className="text-[10px] text-ink-faint/70" title="Different systems — reaching either price costs a trip">
+                      ⇄ different systems
+                    </div>
+                  )}
                 </td>
                 <td className="num px-3 py-2 text-right text-ink-dim">
                   {r.sellTerminals} / {r.buyTerminals}
@@ -151,8 +212,11 @@ export default async function CommoditiesPage() {
         </table>
       </div>
       <p className="mt-3 text-xs text-ink-faint">
-        Prices are aUEC per SCU, crowdsourced by UEX datarunners — may lag live servers. Best
-        sell-to = highest NPC terminal payout; cheapest buy-from = lowest NPC purchase price.
+        Prices are aUEC per SCU, crowdsourced by UEX datarunners — may lag live servers. The
+        mark is the player price where one exists, the NPC seed otherwise. The two NPC figures
+        are the single best payout and the single cheapest purchase <em>anywhere</em>, which is
+        why each carries the terminal offering it — they are rarely in the same place, and
+        reaching either one costs a trip.
       </p>
     </>
   );

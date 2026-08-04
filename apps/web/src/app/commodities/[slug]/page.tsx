@@ -125,6 +125,8 @@ export default async function CommodityPage({ params }: Props) {
   const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? "http://localhost:4000";
   const markPrice = mark?.markPrice != null ? Number(mark.markPrice) : null;
   const windowPairs = mark?.windowPairs ?? 0;
+  const npcSplit =
+    mark?.bestSellSystem != null && mark?.bestBuySystem != null && mark.bestSellSystem !== mark.bestBuySystem;
 
   const val = (s: string | null) => (s ? Number(s) : 0);
   const sellers = prices.filter((p) => val(p.priceSell) > 0).sort((a, b) => val(b.priceSell) - val(a.priceSell));
@@ -222,10 +224,51 @@ export default async function CommodityPage({ params }: Props) {
           </span>
         ) : (
           <span className="text-xs text-ink-faint">
-            NPC seed price — no player trades yet. The first settled trade takes this off the terminal price.
+            NPC seed price
+            {mark?.bestSellTerminal
+              ? ` at ${mark.bestSellTerminal}${mark.bestSellSystem ? ` · ${mark.bestSellSystem}` : ""}`
+              : ""}{" "}
+            — no player trades yet. The first settled trade takes this off the terminal price.
           </span>
         )}
       </div>
+
+      {/*
+        The two NPC edges, each with the terminal offering it. They are a universe-wide max
+        and a universe-wide min, so they usually aren't the same place and often aren't the
+        same system — printing them bare invites reading them as a spread. A player price,
+        by contrast, is quoted where the trader already is.
+      */}
+      <div className="mb-4 grid gap-2 text-xs sm:grid-cols-2">
+        {(
+          [
+            { label: "Best NPC payout", price: mark?.bestSell, terminal: mark?.bestSellTerminal, system: mark?.bestSellSystem, tone: "text-up" },
+            { label: "Cheapest NPC purchase", price: mark?.bestBuy, terminal: mark?.bestBuyTerminal, system: mark?.bestBuySystem, tone: "text-ink" },
+          ] as const
+        ).map((row) => (
+          <div key={row.label} className="rounded border border-line bg-panel px-3 py-2">
+            <div className="text-ink-faint">{row.label}</div>
+            <div className={`num ${row.tone}`}>{fmtAuec(row.price ?? null)}</div>
+            <div className="text-ink-faint">
+              {row.terminal ? (
+                <>
+                  {row.terminal}
+                  {row.system ? <span className="text-ink-faint/70"> · {row.system}</span> : null}
+                </>
+              ) : (
+                "no terminal trades this side"
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      {npcSplit && (
+        <p className="mb-4 text-xs text-ink-faint">
+          ⇄ Those two terminals are in different systems, so the gap between them is not a
+          spread you can capture standing still — it is the reward for the trip, minus fuel,
+          time and whatever meets you on the way.
+        </p>
+      )}
       <ReferenceChart
         commodityId={commodity.id}
         candles1h={candles1h}

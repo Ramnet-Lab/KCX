@@ -78,6 +78,13 @@
       "when": 1785867963617,
       "tag": "0010_market_layer",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1785871613606,
+      "tag": "0011_npc_price_locations",
+      "breakpoints": true
     }
   ]
 }

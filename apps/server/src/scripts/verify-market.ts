@@ -63,6 +63,33 @@ async function main() {
   );
   check("untraded commodities have no player mark", wronglyMarked === 0, `${seeded} on the seed price`);
 
+  // Every NPC price must say where it is. A best_sell with no terminal means the capture
+  // computed a price it cannot attribute, which is exactly the ambiguity these columns exist
+  // to remove — the number would render bare again.
+  const unattributed = Number(
+    await scalar(sql`
+      SELECT count(*)::text FROM commodity_marks_latest
+      WHERE (best_sell IS NOT NULL AND best_sell_terminal IS NULL)
+         OR (best_buy  IS NOT NULL AND best_buy_terminal  IS NULL)
+    `),
+  );
+  const split = Number(
+    await scalar(sql`
+      SELECT count(*)::text FROM commodity_marks_latest
+      WHERE best_sell_system IS NOT NULL AND best_buy_system IS NOT NULL
+        AND best_sell_system <> best_buy_system
+    `),
+  );
+  const bothSided = Number(
+    await scalar(sql`SELECT count(*)::text FROM commodity_marks_latest WHERE best_sell IS NOT NULL AND best_buy IS NOT NULL`),
+  );
+  check("every NPC price knows its terminal", unattributed === 0);
+  check(
+    "the NPC sell/buy split is reported",
+    split > 0,
+    `${split} of ${bothSided} two-sided commodities price in different systems`,
+  );
+
   // And the converse: anything with a qualifying print must be off the baseline.
   const tradedNoMark = Number(
     await scalar(sql`
