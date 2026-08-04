@@ -30,6 +30,12 @@ export const rsiVerifications = pgTable(
     lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    /**
+     * Set when this verification has been spent on a privileged action — currently a
+     * password reset. Proving the RSI bio is what replaces knowing the old password, and
+     * one proof should authorise one reset, not stay live for the rest of its window.
+     */
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

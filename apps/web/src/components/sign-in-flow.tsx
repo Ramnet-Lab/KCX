@@ -31,6 +31,8 @@ export function SignInFlow() {
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [passkeysUsable, setPasskeysUsable] = useState(true);
+  /** Came in via "forgot password" — the closing step should lead with setting a new one. */
+  const [resetting, setResetting] = useState(false);
   const router = useRouter();
 
   /*
@@ -254,9 +256,20 @@ export function SignInFlow() {
               Back
             </button>
           </div>
+          <button
+            onClick={() => {
+              setPassword("");
+              setError(null);
+              setResetting(true);
+              setStep("handle");
+            }}
+            className="tap text-[11px] text-accent hover:underline"
+          >
+            Forgot your password?
+          </button>
           <p className="text-[11px] text-ink-faint">
-            No password set? Verify your RSI handle instead — that always works, and you can set
-            a password afterwards from your account page.
+            No password set, or forgotten it? Verify your RSI handle instead — that always works,
+            and you can set a new password straight afterwards.
           </p>
         </div>
       )}
@@ -343,12 +356,14 @@ export function SignInFlow() {
       )}
 
       {step === "passkey" && (
-        <div className="space-y-4">
+        <div className="flex flex-col gap-4">
           <p className="text-sm text-ink-dim">
-            You're signed in. Set up how you'll get back in next time — you can do both.
+            {resetting
+              ? "You're signed in and your handle is re-verified — set a new password below. You won't be asked for the old one."
+              : "You're signed in. Set up how you'll get back in next time — you can do both."}
           </p>
 
-          <div className="rounded border border-line p-3">
+          <div className={`rounded border border-line p-3 ${resetting ? "order-2" : "order-1"}`}>
             <p className="text-xs text-ink-dim">
               <span className="font-bold text-ink">Passkey</span> — sign in with a tap:
               fingerprint, face or device PIN. Fastest and safest, but it only works on{" "}
@@ -363,10 +378,13 @@ export function SignInFlow() {
             </button>
           </div>
 
-          <div className="rounded border border-line p-3">
+          <div className={`rounded border p-3 ${resetting ? "order-1 border-accent/40" : "order-2 border-line"}`}>
             <p className="text-xs text-ink-dim">
               <span className="font-bold text-ink">Password</span> — works on every device,
-              including your phone. Set one if you don't want to re-verify each time you switch.
+              including your phone.{" "}
+              {resetting
+                ? "Set your new one here."
+                : "Set one if you don't want to re-verify each time you switch."}
             </p>
             <input
               type="password"
@@ -385,7 +403,7 @@ export function SignInFlow() {
             </button>
           </div>
 
-          <button onClick={skipPasskey} className="tap px-3 text-xs text-ink-faint hover:text-ink">
+          <button onClick={skipPasskey} className="tap order-3 px-3 text-xs text-ink-faint hover:text-ink">
             Skip — I'll verify my handle again next time
           </button>
         </div>

@@ -9,6 +9,7 @@ import {
   hashPassword,
   verifyPassword,
 } from "@/lib/password";
+import { consumeVerificationForReset } from "@/lib/rsi-verify";
 import { createSession, currentUser, logAuthEvent } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -95,12 +96,31 @@ export async function POST(request: Request) {
   const me = await currentUser();
   if (!me) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
 
-  // Changing an existing password requires the old one. The session alone isn't enough:
-  // a borrowed unlocked browser shouldn't be able to lock the real owner out.
+  /*
+   * Changing an existing password needs the old one — the session alone isn't enough, or a
+   * borrowed unlocked browser could lock the real owner out.
+   *
+   * The alternative is a freshly completed RSI verification. That is the reset path: someone
+   * who has just re-proved control of the handle's bio has demonstrated MORE than knowing the
+   * password, since that same proof is what created the account. The proof is spent on use.
+   */
   if (me.passwordHash) {
     const supplied = parsed.data.currentPassword;
-    if (!supplied || !(await verifyPassword(supplied, me.passwordHash))) {
-      return NextResponse.json({ error: "Current password is wrong." }, { status: 403 });
+    const byPassword = !!supplied && (await verifyPassword(supplied, me.passwordHash));
+    if (!byPassword) {
+      const byVerification = await consumeVerificationForReset(me.handle);
+      if (!byVerification) {
+        return NextResponse.json(
+          {
+            error: supplied
+              ? "Current password is wrong."
+              : "Enter your current password, or verify your RSI handle again to reset it.",
+            canResetViaRsi: true,
+          },
+          { status: 403 },
+        );
+      }
+      await logAuthEvent("password_set", { userId: me.id, handle: me.handle, detail: "reset_via_rsi" });
     }
   }
 

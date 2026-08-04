@@ -16,10 +16,14 @@ export function AccountPassword({ hasPassword: initial, minLength }: { hasPasswo
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [forgot, setForgot] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const router = useRouter();
+
+  /** With a fresh RSI verification the old password isn't needed — that IS the reset. */
+  const needsCurrent = hasPassword && !forgot;
 
   const reset = () => {
     setCurrent("");
@@ -57,7 +61,7 @@ export function AccountPassword({ hasPassword: initial, minLength }: { hasPasswo
       setError("The two passwords don't match.");
       return;
     }
-    const ok = await send({ action: "set", password: next, ...(hasPassword ? { currentPassword: current } : {}) });
+    const ok = await send({ action: "set", password: next, ...(needsCurrent ? { currentPassword: current } : {}) });
     if (ok) setNote("Password saved. You can now sign in with your handle and password on any device.");
   };
 
@@ -94,7 +98,7 @@ export function AccountPassword({ hasPassword: initial, minLength }: { hasPasswo
         <div className="max-w-sm space-y-3 rounded border border-line bg-panel p-3">
           {/* Autofill wants a username field next to a password to offer the right entry. */}
           <input type="text" autoComplete="username" className="hidden" readOnly value="" />
-          {hasPassword && (
+          {needsCurrent && (
             <label className="block">
               <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">Current password</span>
               <input
@@ -104,7 +108,36 @@ export function AccountPassword({ hasPassword: initial, minLength }: { hasPasswo
                 onChange={(e) => setCurrent(e.target.value)}
                 className="mt-1 w-full rounded border border-line bg-bg px-3 py-2 text-sm text-ink focus:border-ink-faint focus:outline-none"
               />
+              <button
+                onClick={() => {
+                  setForgot(true);
+                  setCurrent("");
+                  setError(null);
+                }}
+                className="tap mt-1 text-[11px] text-accent hover:underline"
+              >
+                I don't know my current password
+              </button>
             </label>
+          )}
+
+          {hasPassword && forgot && (
+            <div className="rounded border border-accent/40 bg-accent/5 px-3 py-2 text-[11px] text-ink-dim">
+              Verify your RSI handle again, then come straight back here and save — proving the
+              handle is yours replaces the old password.
+              <a href="/signin" className="ml-1 font-bold text-accent hover:underline">
+                Verify now &rarr;
+              </a>
+              <button
+                onClick={() => {
+                  setForgot(false);
+                  setError(null);
+                }}
+                className="tap ml-2 text-ink-faint hover:text-ink"
+              >
+                cancel
+              </button>
+            </div>
           )}
           <label className="block">
             <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">New password</span>
@@ -130,7 +163,7 @@ export function AccountPassword({ hasPassword: initial, minLength }: { hasPasswo
           <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={save}
-              disabled={busy || next.length < minLength || !confirm || (hasPassword && !current)}
+              disabled={busy || next.length < minLength || !confirm || (needsCurrent && !current)}
               className="tap rounded border border-accent/60 px-4 py-2 text-sm font-bold text-accent hover:bg-accent/10 disabled:opacity-40"
             >
               {busy ? "…" : "Save"}
@@ -139,13 +172,14 @@ export function AccountPassword({ hasPassword: initial, minLength }: { hasPasswo
               onClick={() => {
                 reset();
                 setOpen(false);
+                setForgot(false);
                 setError(null);
               }}
               className="tap px-3 text-xs text-ink-faint hover:text-ink"
             >
               Cancel
             </button>
-            {hasPassword && (
+            {hasPassword && !forgot && (
               <button
                 onClick={remove}
                 disabled={busy || !current}

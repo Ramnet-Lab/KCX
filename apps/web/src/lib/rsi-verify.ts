@@ -168,6 +168,37 @@ export async function checkVerification(handle: string): Promise<VerifyOutcome> 
   return { ok: true, profile };
 }
 
+/** How long a completed verification stays usable as proof for a password reset. */
+export const RESET_WINDOW_MINUTES = 20;
+
+/**
+ * Spend a recent RSI verification as proof of ownership, for someone who can't produce their
+ * current password.
+ *
+ * This is the whole recovery story: the RSI bio is the root credential, so re-proving it is
+ * strictly stronger evidence than the password it replaces. Claimed with an atomic UPDATE …
+ * RETURNING so two concurrent requests can't both spend the same proof, and the window is far
+ * shorter than the hour allowed for account creation — a reset is a bigger lever than a signup.
+ */
+export async function consumeVerificationForReset(handle: string): Promise<boolean> {
+  const lower = handle.trim().toLowerCase();
+  const rows = await getDb().execute<{ id: string }>(sql`
+    UPDATE rsi_verifications SET consumed_at = now()
+    WHERE id = (
+      SELECT id FROM rsi_verifications
+      WHERE handle = ${lower}
+        AND status = 'verified'
+        AND consumed_at IS NULL
+        AND verified_at > now() - (${RESET_WINDOW_MINUTES} * interval '1 minute')
+      ORDER BY verified_at DESC
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED
+    )
+    RETURNING id::text
+  `);
+  return rows.rows.length > 0;
+}
+
 /** True when this handle has a fresh, verified attempt ready to be turned into an account. */
 export async function consumeVerified(handle: string): Promise<boolean> {
   const lower = handle.trim().toLowerCase();
