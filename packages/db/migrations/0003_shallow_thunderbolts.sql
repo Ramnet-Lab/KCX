@@ -1,1 +1,0 @@
-ALTER TABLE "service_contracts" ADD COLUMN "image_filename" text;

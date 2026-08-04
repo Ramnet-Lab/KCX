@@ -413,6 +413,15 @@ export const COMMITTED_ORG_AUEC = (orgId: string) => sql`(
       FROM org_proposals p
       WHERE p.org_id = ${orgId} AND p.status IN ('open','approved')
     ), 0)
+    +
+    coalesce((
+      -- Contracts the org issued. While a reverse auction runs the org is on the hook for
+      -- the CEILING, since any bid up to it could win; once awarded only the winning bid is
+      -- committed and the rest frees up.
+      SELECT sum(coalesce(sc.awarded_amount, sc.payout))
+      FROM service_contracts sc
+      WHERE sc.org_id = ${orgId} AND sc.status IN ('open','bidding','awarded','in_progress')
+    ), 0)
 )`;
 
 export const COMMITTED_BY_MEMBER = (orgId: string, userId: string) => sql`(
@@ -434,6 +443,13 @@ export const COMMITTED_BY_MEMBER = (orgId: string, userId: string) => sql`(
       SELECT sum(p.value)
       FROM org_proposals p
       WHERE p.org_id = ${orgId} AND p.proposed_by_id = ${userId} AND p.status IN ('open','approved')
+    ), 0)
+    +
+    coalesce((
+      SELECT sum(coalesce(sc.awarded_amount, sc.payout))
+      FROM service_contracts sc
+      WHERE sc.org_id = ${orgId} AND sc.issuer_id = ${userId}
+        AND sc.status IN ('open','bidding','awarded','in_progress')
     ), 0)
 )`;
 

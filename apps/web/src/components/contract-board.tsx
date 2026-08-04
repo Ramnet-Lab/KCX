@@ -623,7 +623,26 @@ function ContractDossier({
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-faint">
                 {c.issuerName ? (
                   <span className="flex items-center gap-1.5">
-                    posted by <span className="text-ink-dim">{c.issuerName}</span>
+                    posted by{" "}
+                    {c.orgSid ? (
+                      <span
+                        className="flex items-center gap-1"
+                        title={`${c.orgName} — issued by the org, paid from its treasury`}
+                      >
+                        {c.orgLogoFilename && (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={`/api/uploads/orgs/${c.orgLogoFilename}`}
+                            alt=""
+                            className="h-3.5 w-3.5 rounded-sm"
+                          />
+                        )}
+                        <span className="font-bold text-ink-dim">{c.orgSid}</span>
+                        <span className="text-ink-faint">via {c.issuerName}</span>
+                      </span>
+                    ) : (
+                      <span className="text-ink-dim">{c.issuerName}</span>
+                    )}
                     {c.issuerStanding && <ContractStandingBadge {...c.issuerStanding} compact />}
                   </span>
                 ) : (

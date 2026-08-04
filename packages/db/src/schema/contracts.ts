@@ -14,6 +14,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { gameVersions, locations } from "./market";
+import { orgs } from "./orgs";
 import { users } from "./orders";
 
 /**
@@ -85,6 +86,15 @@ export const serviceContracts = pgTable(
     issuerId: uuid("issuer_id")
       .notNull()
       .references(() => users.id),
+    /**
+     * Set when the contract is issued on an org's behalf rather than the issuer's own.
+     *
+     * It decides whose money is on the hook: an org contract commits the treasury, and the
+     * payout comes out of it at settlement. The person stays recorded either way — an org
+     * cannot click anything, and "which member issued this" is the first question asked
+     * when org money moves.
+     */
+    orgId: uuid("org_id").references(() => orgs.id),
     /** Null until claimed. */
     executorId: uuid("executor_id").references(() => users.id),
     /** Patch-scoped like everything else: cargo and context die at each game patch. */

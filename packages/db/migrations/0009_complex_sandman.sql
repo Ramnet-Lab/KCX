@@ -1,1 +1,0 @@
-ALTER TABLE "users" ADD COLUMN "banned_until" timestamp with time zone;

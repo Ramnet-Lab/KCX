@@ -2,6 +2,7 @@ import { and, asc, eq, lte, sql } from "drizzle-orm";
 import type { Db } from "../client";
 import { contractBids, contractBreaches, contractEvents, contractRatings, serviceContracts } from "../schema/contracts";
 import { moderationActions } from "../schema/moderation";
+import { orgs } from "../schema/orgs";
 import { users } from "../schema/orders";
 
 /**
@@ -26,6 +27,11 @@ export type ServiceContractDto = {
   imageFilename: string | null;
   issuerId: string | null;
   issuerName: string | null;
+  /** Set when the contract is the org's rather than the issuer's own. */
+  orgId: string | null;
+  orgSid: string | null;
+  orgName: string | null;
+  orgLogoFilename: string | null;
   executorId: string | null;
   executorName: string | null;
   expiresAt: string | null;
@@ -94,6 +100,7 @@ export async function listContractsBoard(db: Db, opts: ServiceContractListOption
     id: string; title: string; description: string | null; category: string;
     payout: string; status: string; location_name: string | null; image_filename: string | null;
     issuer_id: string; issuer_name: string; executor_id: string | null; executor_name: string | null;
+    org_id: string | null; org_sid: string | null; org_name: string | null; org_logo: string | null;
     // Raw execute() hands back whatever the driver produced — string or Date depending on
     // the column and parser, so these are normalised below rather than trusted.
     expires_at: string | Date; created_at: string | Date;
@@ -108,6 +115,7 @@ export async function listContractsBoard(db: Db, opts: ServiceContractListOption
     SELECT c.id::text, c.title, c.description, c.category, c.payout::text, c.status,
            l.name AS location_name, c.image_filename,
            c.issuer_id::text, iss.display_name AS issuer_name,
+           c.org_id::text, og.sid AS org_sid, og.name AS org_name, og.logo_filename AS org_logo,
            c.executor_id::text, exe.display_name AS executor_name,
            c.expires_at, c.created_at, c.issuer_confirmed_at, c.executor_confirmed_at,
            c.pricing_mode, c.visibility,
@@ -122,6 +130,7 @@ export async function listContractsBoard(db: Db, opts: ServiceContractListOption
     LEFT JOIN users exe ON exe.id = c.executor_id
     LEFT JOIN users awd ON awd.id = c.awarded_to_id
     LEFT JOIN locations l ON l.id = c.location_id
+    LEFT JOIN orgs og ON og.id = c.org_id
     LEFT JOIN LATERAL (
       SELECT count(*) AS bid_count FROM contract_bids cb
       WHERE cb.contract_id = c.id AND cb.status <> 'withdrawn'
@@ -172,6 +181,10 @@ export async function listContractsBoard(db: Db, opts: ServiceContractListOption
         imageFilename: null,
         issuerId: null,
         issuerName: null,
+        orgId: null,
+        orgSid: null,
+        orgName: null,
+        orgLogoFilename: null,
         executorId: null,
         executorName: null,
         expiresAt: null,
@@ -218,6 +231,10 @@ export async function listContractsBoard(db: Db, opts: ServiceContractListOption
       imageFilename: r.image_filename,
       issuerId: r.issuer_id,
       issuerName: r.issuer_name,
+      orgId: r.org_id,
+      orgSid: r.org_sid,
+      orgName: r.org_name,
+      orgLogoFilename: r.org_logo,
       executorId: r.executor_id,
       executorName: r.executor_name,
       expiresAt: new Date(r.expires_at).toISOString(),
@@ -660,18 +677,33 @@ export async function resolveServiceContract(
     // An auction settles at the winning bid, never the advertised ceiling.
     const settlement = c.awardedAmount ?? c.payout;
 
-    const [issuer] = await tx.select().from(users).where(eq(users.id, c.issuerId)).for("update");
-    if ((issuer?.auecBalance ?? 0) < settlement) {
-      return {
-        ok: false as const,
-        error: `The issuer has ${(issuer?.auecBalance ?? 0).toLocaleString()} aUEC but the payout is ${settlement.toLocaleString()}. They need to top up their declared balance before this can settle.`,
-      };
+    // An org contract is paid by the org, not by the member who issued it. The executor is
+    // always an individual — labour is personal even when the client isn't.
+    if (c.orgId) {
+      const [org] = await tx.select().from(orgs).where(eq(orgs.id, c.orgId)).for("update");
+      if ((org?.treasury ?? 0) < settlement) {
+        return {
+          ok: false as const,
+          error: `${org?.name ?? "The issuing org"} has ${(org?.treasury ?? 0).toLocaleString()} aUEC in its declared treasury but the payout is ${settlement.toLocaleString()}. An officer needs to top it up before this can settle.`,
+        };
+      }
+      await tx
+        .update(orgs)
+        .set({ treasury: sql`${orgs.treasury} - ${settlement}`, updatedAt: now })
+        .where(eq(orgs.id, c.orgId));
+    } else {
+      const [issuer] = await tx.select().from(users).where(eq(users.id, c.issuerId)).for("update");
+      if ((issuer?.auecBalance ?? 0) < settlement) {
+        return {
+          ok: false as const,
+          error: `The issuer has ${(issuer?.auecBalance ?? 0).toLocaleString()} aUEC but the payout is ${settlement.toLocaleString()}. They need to top up their declared balance before this can settle.`,
+        };
+      }
+      await tx
+        .update(users)
+        .set({ auecBalance: sql`${users.auecBalance} - ${settlement}` })
+        .where(eq(users.id, c.issuerId));
     }
-
-    await tx
-      .update(users)
-      .set({ auecBalance: sql`${users.auecBalance} - ${settlement}` })
-      .where(eq(users.id, c.issuerId));
     await tx
       .update(users)
       .set({ auecBalance: sql`${users.auecBalance} + ${settlement}` })
