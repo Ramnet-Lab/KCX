@@ -1,0 +1,27 @@
+{
+  "name": "@kcx/server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "ingest": "tsx src/scripts/ingest.ts"
+  },
+  "dependencies": {
+    "@kcx/db": "workspace:*",
+    "@kcx/shared": "workspace:*",
+    "drizzle-orm": "0.45.2",
+    "pg": "8.22.0",
+    "pg-boss": "12.27.0",
+    "socket.io": "4.8.3",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.2",
+    "@types/pg": "8.20.3",
+    "tsx": "4.23.5",
+    "typescript": "5.9.3"
+  }
+}

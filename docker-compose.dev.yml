@@ -1,0 +1,67 @@
+# Local development. Two ways to run:
+#
+#   docker compose -f docker-compose.dev.yml up -d db     # database only, apps on the host
+#   docker compose -f docker-compose.dev.yml --profile full up --build
+#
+# The database publishes on 5433 to match the portable-Postgres setup, so switching
+# between the two needs no .env change.
+
+name: kcx-dev
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kcx
+      POSTGRES_PASSWORD: kcx
+      POSTGRES_DB: kcx
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - "5433:5432"
+    volumes:
+      - dev-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kcx -d kcx"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  server:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: docker/server.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://kcx:kcx@db:5432/kcx
+      UEX_API_BASE: https://api.uexcorp.uk/2.0
+      UEX_API_TOKEN: ${UEX_API_TOKEN:-}
+      WS_PORT: "4000"
+      WEB_ORIGINS: http://localhost:3000
+    ports:
+      - "4000:4000"
+
+  web:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://kcx:kcx@db:5432/kcx
+      NEXT_PUBLIC_WS_URL: http://localhost:4000
+      IP_HASH_SALT: dev-salt
+      ALLOW_DEV_LOGIN: "true"
+    ports:
+      - "3000:3000"
+
+volumes:
+  dev-db:

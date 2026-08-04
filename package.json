@@ -1,0 +1,29 @@
+{
+  "name": "kcx",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.20.0",
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "dev": "concurrently -n web,server -c blue,yellow \"pnpm --filter @kcx/web dev\" \"pnpm --filter @kcx/server dev\"",
+    "dev:web": "pnpm --filter @kcx/web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "ingest": "pnpm --filter @kcx/server ingest",
+    "seed:demo": "pnpm --filter @kcx/server exec tsx src/scripts/seed-demo-book.ts",
+    "db:start": "node scripts/db.mjs start",
+    "db:stop": "node scripts/db.mjs stop",
+    "db:status": "node scripts/db.mjs status",
+    "db:push": "pnpm --filter @kcx/db push",
+    "db:generate": "pnpm --filter @kcx/db generate",
+    "docker:dev": "docker compose -f docker-compose.dev.yml --profile full up --build",
+    "docker:build": "docker compose build",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f --tail=100"
+  },
+  "devDependencies": {
+    "concurrently": "10.0.4",
+    "typescript": "5.9.3"
+  }
+}

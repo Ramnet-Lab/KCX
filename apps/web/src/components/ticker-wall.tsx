@@ -1,0 +1,403 @@
+"use client";
+
+import type { TickerEntry } from "@kcx/shared";
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import {
+  loadCollections,
+  loadView,
+  newCollectionId,
+  saveCollections,
+  saveView,
+  type Collection,
+  type WallView,
+} from "@/lib/collections";
+
+type Props = {
+  entries: TickerEntry[];
+  lastUpdate: string | null;
+  flash: boolean;
+  onPlaceOrder: (seed: { commodityId?: number; side?: "buy" | "sell" }) => void;
+};
+
+const fmt = (n: number | null) => (n == null ? "—" : n.toLocaleString("en-US", { maximumFractionDigits: 0 }));
+
+function changeBadge(chg: number | null) {
+  const color = chg == null ? "text-ink-faint" : chg > 0 ? "text-up" : chg < 0 ? "text-down" : "text-ink-dim";
+  const text = chg == null ? "· · ·" : `${chg > 0 ? "▲" : chg < 0 ? "▼" : "•"} ${Math.abs(chg).toFixed(1)}%`;
+  return <span className={`num text-xs ${color}`}>{text}</span>;
+}
+
+/** Market wall (presentational — live state comes from MarketDashboard): search, tile/list views, collections. */
+export function TickerWall({ entries, lastUpdate, flash, onPlaceOrder }: Props) {
+  const [query, setQuery] = useState("");
+  const [view, setView] = useState<WallView>("tiles");
+  const [collections, setCollections] = useState<Collection[]>([]);
+  const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null);
+  const [assignMenuFor, setAssignMenuFor] = useState<number | null>(null);
+  const [creatingCollection, setCreatingCollection] = useState(false);
+  const [newName, setNewName] = useState("");
+  // State (not ref) — a ref-based gate lets the save-effects' first run clobber stored
+  // data with defaults under StrictMode's double-invoked effects.
+  const [hydrated, setHydrated] = useState(false);
+
+  // localStorage is browser-only: load after mount, save on change (post-hydration).
+  useEffect(() => {
+    setCollections(loadCollections());
+    setView(loadView());
+    setHydrated(true);
+  }, []);
+  useEffect(() => {
+    if (hydrated) saveCollections(collections);
+  }, [collections, hydrated]);
+  useEffect(() => {
+    if (hydrated) saveView(view);
+  }, [view, hydrated]);
+
+  const activeCollection = collections.find((c) => c.id === activeCollectionId) ?? null;
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    let list = [...entries].sort((a, b) => {
+      const am = Math.abs(a.change24hPct ?? 0);
+      const bm = Math.abs(b.change24hPct ?? 0);
+      if (bm !== am) return bm - am;
+      return (b.effectiveSell ?? 0) - (a.effectiveSell ?? 0);
+    });
+    if (activeCollection) {
+      const ids = new Set(activeCollection.commodityIds);
+      list = list.filter((e) => ids.has(e.commodityId));
+    }
+    if (q) {
+      list = list.filter((e) => e.code.toLowerCase().includes(q) || e.name.toLowerCase().includes(q));
+    }
+    return list;
+  }, [entries, query, activeCollection]);
+
+  const membership = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const c of collections) for (const id of c.commodityIds) m.set(id, (m.get(id) ?? 0) + 1);
+    return m;
+  }, [collections]);
+
+  const toggleMembership = (collectionId: string, commodityId: number) => {
+    setCollections((prev) =>
+      prev.map((c) =>
+        c.id !== collectionId
+          ? c
+          : c.commodityIds.includes(commodityId)
+            ? { ...c, commodityIds: c.commodityIds.filter((id) => id !== commodityId) }
+            : { ...c, commodityIds: [...c.commodityIds, commodityId] },
+      ),
+    );
+  };
+
+  const createCollection = (name: string, initialCommodityId?: number) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const collection: Collection = {
+      id: newCollectionId(),
+      name: trimmed,
+      commodityIds: initialCommodityId != null ? [initialCommodityId] : [],
+    };
+    setCollections((prev) => [...prev, collection]);
+    setNewName("");
+    setCreatingCollection(false);
+  };
+
+  const deleteCollection = (id: string) => {
+    setCollections((prev) => prev.filter((c) => c.id !== id));
+    if (activeCollectionId === id) setActiveCollectionId(null);
+  };
+
+  const AssignButton = ({ commodityId }: { commodityId: number }) => {
+    const count = membership.get(commodityId) ?? 0;
+    return (
+      <button
+        aria-label="Assign to collection"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setAssignMenuFor(assignMenuFor === commodityId ? null : commodityId);
+        }}
+        className={`tap rounded px-2 py-1 text-base leading-none active:scale-95 ${count > 0 ? "text-accent" : "text-ink-faint hover:text-ink-dim"}`}
+        title={count > 0 ? `In ${count} collection${count > 1 ? "s" : ""}` : "Add to collection"}
+      >
+        {count > 0 ? "★" : "☆"}
+      </button>
+    );
+  };
+
+  /** Compact BUY/SELL pair — the tile and row entry points into the order modal. */
+  const TradeButtons = ({ commodityId, compact = false }: { commodityId: number; compact?: boolean }) => (
+    <span className={`flex ${compact ? "gap-0.5" : "gap-1"}`}>
+      {(["buy", "sell"] as const).map((side) => (
+        <button
+          key={side}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onPlaceOrder({ commodityId, side });
+          }}
+          title={side === "buy" ? "Post a WTB order" : "Post a WTS order"}
+          className={`tap rounded px-2 py-1 text-[11px] font-bold active:scale-95 ${
+            side === "buy" ? "bg-up/15 text-up hover:bg-up/25" : "bg-down/15 text-down hover:bg-down/25"
+          }`}
+        >
+          {side === "buy" ? "BUY" : "SELL"}
+        </button>
+      ))}
+    </span>
+  );
+
+  const AssignMenu = ({ commodityId }: { commodityId: number }) => (
+    <div
+      className="absolute right-2 top-8 z-20 w-56 rounded border border-line bg-panel-2 p-2 shadow-xl"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+    >
+      <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-ink-faint">Collections</div>
+      {collections.length === 0 && (
+        <div className="mb-1 text-xs text-ink-faint">No collections yet — create one below.</div>
+      )}
+      {collections.map((c) => (
+        <label key={c.id} className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-xs text-ink hover:bg-panel">
+          <input
+            type="checkbox"
+            checked={c.commodityIds.includes(commodityId)}
+            onChange={() => toggleMembership(c.id, commodityId)}
+            className="accent-[#e8b449]"
+          />
+          <span className="truncate">{c.name}</span>
+          <span className="ml-auto text-ink-faint">{c.commodityIds.length}</span>
+        </label>
+      ))}
+      <form
+        className="mt-2 flex gap-1"
+        onSubmit={(e) => {
+          e.preventDefault();
+          createCollection(newName, commodityId);
+        }}
+      >
+        <input
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          placeholder="New collection…"
+          className="w-full rounded border border-line bg-bg px-2 py-1 text-xs text-ink placeholder:text-ink-faint focus:outline-none"
+        />
+        <button type="submit" className="rounded border border-line px-2 text-xs text-ink-dim hover:text-ink">
+          +
+        </button>
+      </form>
+    </div>
+  );
+
+  return (
+    <div>
+      {/* Search + view toggle */}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search ticker or name…  (e.g. GOLD, quantainium)"
+          aria-label="Search commodities"
+          className="w-full max-w-md rounded border border-line bg-panel px-3 py-1.5 text-sm text-ink placeholder:text-ink-faint focus:border-ink-faint focus:outline-none"
+        />
+        <div className="ml-auto flex rounded border border-line">
+          {(["tiles", "list"] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              className={`px-3 py-1 text-xs ${view === v ? "bg-panel-2 text-ink" : "text-ink-faint hover:text-ink-dim"}`}
+              aria-pressed={view === v}
+            >
+              {v === "tiles" ? "⊞ Tiles" : "≡ List"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Collection chips */}
+      <div className="mb-3 flex flex-wrap items-center gap-1.5 text-xs">
+        <button
+          onClick={() => setActiveCollectionId(null)}
+          className={`tap rounded-full border px-3 py-1.5 ${
+            activeCollectionId === null ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink"
+          }`}
+        >
+          All ({entries.length})
+        </button>
+        {collections.map((c) => (
+          <span key={c.id} className="inline-flex items-center">
+            <button
+              onClick={() => setActiveCollectionId(activeCollectionId === c.id ? null : c.id)}
+              className={`tap rounded-full border px-3 py-1.5 ${
+                activeCollectionId === c.id ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink"
+              }`}
+            >
+              {c.name} ({c.commodityIds.length})
+            </button>
+            {activeCollectionId === c.id && (
+              <button
+                onClick={() => deleteCollection(c.id)}
+                title={`Delete collection "${c.name}"`}
+                className="ml-0.5 px-1 text-ink-faint hover:text-danger"
+              >
+                ×
+              </button>
+            )}
+          </span>
+        ))}
+        {creatingCollection ? (
+          <form
+            className="inline-flex items-center gap-1"
+            onSubmit={(e) => {
+              e.preventDefault();
+              createCollection(newName);
+            }}
+          >
+            <input
+              autoFocus
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => e.key === "Escape" && setCreatingCollection(false)}
+              placeholder="Collection name"
+              className="w-36 rounded-full border border-line bg-panel px-2.5 py-0.5 text-xs text-ink focus:outline-none"
+            />
+            <button type="submit" className="text-ink-dim hover:text-ink">
+              ✓
+            </button>
+          </form>
+        ) : (
+          <button
+            onClick={() => {
+              setCreatingCollection(true);
+              setNewName("");
+            }}
+            className="rounded-full border border-dashed border-line px-2.5 py-0.5 text-ink-faint hover:text-ink"
+          >
+            + New collection
+          </button>
+        )}
+        <span className="ml-auto text-ink-faint">
+          collections live in this browser until accounts arrive
+        </span>
+      </div>
+
+      {/* Status line */}
+      <div className="mb-3 flex items-baseline justify-between text-xs text-ink-faint">
+        <span>
+          {visible.length} of {entries.length} commodities
+          {activeCollection ? ` · ${activeCollection.name}` : ""} · sorted by 24h movement
+        </span>
+        <span className={flash ? "text-accent" : ""}>
+          {lastUpdate ? `live · updated ${new Date(lastUpdate).toLocaleTimeString()}` : "live feed connected on next poll"}
+        </span>
+      </div>
+
+      {visible.length === 0 && (
+        <div className="rounded border border-line bg-panel p-8 text-center text-sm text-ink-faint">
+          {activeCollection && activeCollection.commodityIds.length === 0
+            ? "Nothing in this collection yet — click ☆ on any commodity to add it."
+            : "No commodities match."}
+        </div>
+      )}
+
+      {view === "tiles" ? (
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+          {visible.map((e) => (
+            <Link
+              key={e.commodityId}
+              href={`/commodities/${e.slug}`}
+              className={`relative rounded border border-line bg-panel p-3 transition-colors hover:border-ink-faint ${
+                flash ? "border-accent/40" : ""
+              }`}
+            >
+              <div className="flex items-baseline justify-between gap-1">
+                <span className="text-xs font-bold tracking-wider text-ink-dim">{e.code}</span>
+                <span className="flex items-center gap-1">
+                  {changeBadge(e.change24hPct)}
+                  <AssignButton commodityId={e.commodityId} />
+                </span>
+              </div>
+              <div className="mt-1 truncate text-sm text-ink">
+                {e.name}
+                {e.isIllegal && <span className="ml-1 align-middle text-[9px] font-bold text-danger">◆</span>}
+              </div>
+              <div className="num mt-1 flex items-baseline gap-1 text-base text-up">
+                {fmt(e.effectiveSell)}
+                {e.sellSource === "player" && (
+                  <span className="text-[9px] font-bold text-accent" title="Player market beats the NPC terminal price">
+                    PLR
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="num text-xs text-ink-faint">
+                  buy {fmt(e.effectiveBuy)}
+                  {e.buySource === "player" && <span className="ml-0.5 text-accent">·plr</span>}
+                </span>
+                <TradeButtons commodityId={e.commodityId} compact />
+              </div>
+              {assignMenuFor === e.commodityId && <AssignMenu commodityId={e.commodityId} />}
+            </Link>
+          ))}
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded border border-line">
+          <table className="w-full bg-panel text-left text-sm">
+            <thead className="border-b border-line text-xs uppercase tracking-wider text-ink-dim">
+              <tr>
+                <th className="px-3 py-2">Ticker</th>
+                <th className="px-3 py-2">Commodity</th>
+                <th className="px-3 py-2 text-right">Best sell</th>
+                <th className="px-3 py-2 text-right">Best buy</th>
+                <th className="px-3 py-2 text-right">24h</th>
+                <th className="px-3 py-2 text-center">Trade</th>
+                <th className="px-3 py-2 text-right">★</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((e) => (
+                <tr key={e.commodityId} className="relative border-b border-line/50 hover:bg-panel-2">
+                  <td className="px-3 py-1.5 text-xs font-bold tracking-wider text-ink-dim">{e.code}</td>
+                  <td className="px-3 py-1.5">
+                    <Link href={`/commodities/${e.slug}`} className="text-ink hover:text-accent">
+                      {e.name}
+                    </Link>
+                    {e.isIllegal && <span className="ml-1 text-[9px] font-bold text-danger">◆</span>}
+                  </td>
+                  <td className="num px-3 py-1.5 text-right text-up">
+                    {fmt(e.effectiveSell)}
+                    {e.sellSource === "player" && <span className="ml-1 text-[9px] text-accent">PLR</span>}
+                  </td>
+                  <td className="num px-3 py-1.5 text-right text-ink-dim">
+                    {fmt(e.effectiveBuy)}
+                    {e.buySource === "player" && <span className="ml-1 text-[9px] text-accent">PLR</span>}
+                  </td>
+                  <td className="px-3 py-1.5 text-right">{changeBadge(e.change24hPct)}</td>
+                  <td className="px-3 py-1.5">
+                    <span className="flex justify-center">
+                      <TradeButtons commodityId={e.commodityId} />
+                    </span>
+                  </td>
+                  <td className="relative px-3 py-1.5 text-right">
+                    <AssignButton commodityId={e.commodityId} />
+                    {assignMenuFor === e.commodityId && <AssignMenu commodityId={e.commodityId} />}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* click-away closer for the assign menu */}
+      {assignMenuFor !== null && (
+        <div className="fixed inset-0 z-10" onClick={() => setAssignMenuFor(null)} aria-hidden />
+      )}
+    </div>
+  );
+}

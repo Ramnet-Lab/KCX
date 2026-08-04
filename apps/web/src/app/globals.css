@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+@theme {
+  /* KCX terminal palette — dark only */
+  --color-bg: #0b0e13;
+  --color-panel: #11161f;
+  --color-panel-2: #161d29;
+  --color-line: #232c3b;
+  --color-ink: #d5dce8;
+  --color-ink-dim: #8b96a8;
+  --color-ink-faint: #5b6575;
+  --color-accent: #e8b449;
+  --color-up: #4ade80;
+  --color-down: #f87171;
+  --color-danger: #ef4444;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-feature-settings: "tnum";
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Touch ---------- */
+
+/* Kill the blue flash Android paints over every tap; we supply our own feedback. */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/*
+ * Touch targets. WCAG 2.2 asks for 24px minimum, Apple and Google both say 44px. A dense
+ * trading UI can't make every control 44px visually, so instead we grow the *hit area*
+ * with a pseudo-element while leaving the painted size alone — the button still looks
+ * compact but is comfortably tappable.
+ */
+button,
+a[href],
+summary,
+[role="button"] {
+  touch-action: manipulation; /* removes the 300ms double-tap delay */
+}
+
+@media (pointer: coarse) {
+  /*
+   * Grow the element itself rather than overlaying an invisible hit box. The overlay
+   * trick reads well in isolation but in a dense UI those boxes extend over adjacent
+   * controls and eat their taps — which is exactly what broke sign-in.
+   */
+  .tap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 40px;
+    min-width: 40px;
+  }
+
+  /* Native controls: never smaller than a fingertip, and never zoom-on-focus. */
+  input,
+  select,
+  textarea {
+    font-size: max(16px, 1em); /* iOS zooms the page when focusing <16px text */
+    min-height: 40px;
+  }
+
+  input[type="checkbox"] {
+    min-height: 20px;
+    min-width: 20px;
+  }
+}
+
+/* Momentum scrolling inside the wide tables/charts that scroll on their own. */
+.overflow-x-auto {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+/* Charts capture their own gestures; don't let a pinch there zoom the whole page. */
+.chart-surface {
+  touch-action: pan-y pinch-zoom;
+}

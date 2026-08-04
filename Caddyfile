@@ -1,0 +1,37 @@
+# TLS is provisioned automatically from Let's Encrypt. This is not optional polish:
+# WebAuthn (passkeys) only works on a secure origin, so plain http can't sign anyone in.
+
+{$KCX_DOMAIN} {
+	encode zstd gzip
+
+	# socket.io lives in the worker process. Long-lived upgrades need a generous timeout —
+	# the default would sever idle market feeds.
+	handle /ws/* {
+		uri strip_prefix /ws
+		reverse_proxy server:4000 {
+			transport http {
+				read_timeout 24h
+				write_timeout 24h
+			}
+		}
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Fan-site policy: nothing here is embeddable elsewhere.
+		X-Frame-Options "DENY"
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}

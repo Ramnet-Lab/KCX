@@ -1,0 +1,17 @@
+**/node_modules
+**/.next
+**/dist
+**/*.tsbuildinfo
+
+# local dev state that must never enter an image
+.pgdata
+tools
+.env
+.env.*
+!.env.example
+
+.git
+.github
+docs
+*.md
+open-lan-ports.ps1
