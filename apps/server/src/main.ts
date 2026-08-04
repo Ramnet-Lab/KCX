@@ -17,6 +17,7 @@ import {
   expireContractAwards,
   expireServiceContracts,
   runMigrations,
+  runPriceAlerts,
   expireUnfilledOrders,
   getDb,
   reconcileReservations,
@@ -189,6 +190,11 @@ async function main() {
     if (lapsedSales > 0) console.log(`[bazaar] ${lapsedSales} sale(s) went unconfirmed → units back on the board`);
     const deadListings = await expireBazaarListings(db);
     if (deadListings > 0) console.log(`[bazaar] ${deadListings} listing(s) ran out of time`);
+    // Alerts run LAST in the sweep, so they see the state everything above just produced —
+    // an auction that closed this minute is a settled price, and someone watching that item
+    // should hear about it now rather than five minutes later.
+    const alerts = await runPriceAlerts(db);
+    if (alerts > 0) console.log(`[alerts] ${alerts} price alert(s) fired`);
     // Cosmetic: isBanned() already treats an elapsed ban as lifted, but leaving served bans
     // in the data makes the mod console lie about who is currently banned.
     const unbanned = await liftExpiredBans(db);

@@ -1,4 +1,4 @@
-import { getBazaarListing, getDb, myThreadForListing } from "@kcx/db";
+import { getBazaarListing, getDb, listWatchlist, myThreadForListing } from "@kcx/db";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { BazaarDetail } from "@/components/bazaar-detail";
@@ -26,10 +26,16 @@ export default async function BazaarListingPage({ params }: { params: Promise<{ 
 
   let listing = null;
   let myThreadId: string | null = null;
+  let watching: { id: number; threshold: number | null; direction: string } | null = null;
   try {
     const db = getDb();
     listing = await getBazaarListing(db, id, user?.id ?? null);
-    if (user && listing) myThreadId = (await myThreadForListing(db, id, user.id))?.id ?? null;
+    if (user && listing) {
+      myThreadId = (await myThreadForListing(db, id, user.id))?.id ?? null;
+      if (listing.itemId != null) {
+        watching = (await listWatchlist(db, user.id)).find((w) => w.itemId === listing!.itemId) ?? null;
+      }
+    }
   } catch (err) {
     console.error("[bazaar listing page]", err instanceof Error ? err.message : err);
   }
@@ -41,6 +47,7 @@ export default async function BazaarListingPage({ params }: { params: Promise<{ 
       signedIn={!!user}
       verified={!!user?.isVerified}
       myThreadId={myThreadId}
+      watching={watching}
     />
   );
 }

@@ -4,6 +4,7 @@ import {
   commodityTape,
   BULK_SCU_THRESHOLD,
   getDb,
+  listWatchlist,
   locations,
   MARK_CONFIDENT_PAIRS,
   MARK_WINDOW_HOURS,
@@ -18,7 +19,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ReferenceChart, type CandlePoint } from "@/components/reference-chart";
 import { TapePanel } from "@/components/tape-panel";
+import { WatchButton } from "@/components/watchlist";
 import { fmtAuec, fmtScu, timeAgo } from "@/lib/format";
+import { currentUser } from "@/lib/session";
 
 // Live market data: never prerender at build time, when the database is empty.
 export const dynamic = "force-dynamic";
@@ -76,6 +79,13 @@ export default async function CommodityPage({ params }: Props) {
     );
   }
   if (!commodity) notFound();
+
+  // The watch control needs to know whether this commodity is already on the viewer's list,
+  // so the button reads "watching" instead of offering to add it a second time.
+  const viewer = await currentUser();
+  const watching = viewer
+    ? ((await listWatchlist(db, viewer.id)).find((w) => w.commodityId === commodity!.id) ?? null)
+    : null;
 
   const loadCandles = async (period: "1h" | "1d", limit: number): Promise<CandlePoint[]> => {
     const rows = await db
@@ -199,6 +209,11 @@ export default async function CommodityPage({ params }: Props) {
         {commodity.isIllegal && (
           <span className="rounded bg-danger/15 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-danger">
             CONTRABAND
+          </span>
+        )}
+        {viewer && (
+          <span className="ml-auto">
+            <WatchButton commodityId={commodity.id} label={commodity.name} existing={watching} />
           </span>
         )}
       </div>

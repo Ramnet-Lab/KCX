@@ -81,6 +81,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/credits" className="hover:text-ink">
                 Credits
               </Link>
+              <Link href="/developers" className="hover:text-ink">
+                API
+              </Link>
             </p>
           </div>
         </footer>

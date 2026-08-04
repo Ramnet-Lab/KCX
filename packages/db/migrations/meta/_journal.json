@@ -113,6 +113,13 @@
       "when": 1785876922087,
       "tag": "0015_bazaar_threads",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1785878023091,
+      "tag": "0016_watchlist",
+      "breakpoints": true
     }
   ]
 }

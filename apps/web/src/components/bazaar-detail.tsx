@@ -13,6 +13,7 @@ import { useState } from "react";
 import { ItemPriceHistory } from "@/components/bazaar-item-picker";
 import { LoadoutEditor, LoadoutList } from "@/components/bazaar-loadout";
 import { StartBazaarThread } from "@/components/bazaar-thread";
+import { WatchButton } from "@/components/watchlist";
 import { BazaarStandingBadge } from "@/components/trader-standing";
 import { countdown, fmtAuec, isClosingSoon, timeLeft } from "@/lib/countdown";
 
@@ -30,11 +31,13 @@ export function BazaarDetail({
   signedIn,
   verified,
   myThreadId = null,
+  watching = null,
 }: {
   listing: BazaarListingDto;
   signedIn: boolean;
   verified: boolean;
   myThreadId?: string | null;
+  watching?: { id: number; threshold: number | null; direction: string } | null;
 }) {
   const [l, setListing] = useState(initial);
   const [active, setActive] = useState(0);
@@ -321,9 +324,14 @@ export function BazaarDetail({
               buyer deciding whether the price is fair needs both numbers in one place. */}
           {l.itemId != null && (
             <div className="rounded border border-line bg-panel p-4">
-              <h2 className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">
-                What these go for
-              </h2>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">
+                  What these go for
+                </h2>
+                {signedIn && (
+                  <WatchButton itemId={l.itemId} label={l.itemName ?? l.title} existing={watching} />
+                )}
+              </div>
               <ItemPriceHistory itemId={l.itemId} />
             </div>
           )}

@@ -2,7 +2,11 @@ import {
   getDb,
   listBazaarSales,
   listBazaarThreads,
+  listPriceAlerts,
+  listWatchlist,
   type BazaarThreadDto,
+  type PriceAlertDto,
+  type WatchEntryDto,
   listContracts,
   listContractsBoard,
   listOrders,
@@ -41,11 +45,13 @@ export default async function ManagePage() {
   let orders: OrderDto[] = [];
   let escrows: ContractDto[] = [];
   let threads: BazaarThreadDto[] = [];
+  let watchlist: WatchEntryDto[] = [];
+  let alerts: PriceAlertDto[] = [];
   let toRate: { saleId: string; counterpartyName: string; title: string }[] = [];
 
   try {
     const db = getDb();
-    [listings, sales, serviceContracts, orders, escrows, threads, toRate] = await Promise.all([
+    [listings, sales, serviceContracts, orders, escrows, threads, watchlist, alerts, toRate] = await Promise.all([
       myBazaarListings(db, user.id),
       listBazaarSales(db, user.id),
       listContractsBoard(db, {
@@ -62,6 +68,8 @@ export default async function ManagePage() {
       }),
       listContracts(db, user.id),
       listBazaarThreads(db, user.id),
+      listWatchlist(db, user.id),
+      listPriceAlerts(db, user.id),
       pendingBazaarRatings(db, user.id),
     ]);
   } catch (err) {
@@ -86,6 +94,8 @@ export default async function ManagePage() {
         orders={orders}
         escrows={escrows}
         threads={threads}
+        watchlist={watchlist}
+        alerts={alerts}
         pendingRatings={toRate}
       />
     </>

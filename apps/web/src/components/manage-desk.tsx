@@ -5,7 +5,9 @@ import type {
   BazaarSaleDto,
   BazaarThreadDto,
   ContractDto,
+  PriceAlertDto,
   ServiceContractDto,
+  WatchEntryDto,
 } from "@kcx/db";
 import { BAZAAR_CATEGORY_LABELS, type BazaarCategory, type OrderDto } from "@kcx/shared";
 import Link from "next/link";
@@ -13,9 +15,10 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { BazaarThreadPanel } from "@/components/bazaar-thread";
 import { StarPicker } from "@/components/trader-standing";
+import { WatchlistPanel } from "@/components/watchlist";
 import { fmtAuec, timeLeft } from "@/lib/countdown";
 
-type Tab = "messages" | "selling" | "sales" | "contracts" | "orders";
+type Tab = "messages" | "selling" | "sales" | "contracts" | "orders" | "watchlist";
 
 /**
  * The trader's own desk.
@@ -31,6 +34,8 @@ export function ManageDesk({
   orders,
   escrows,
   threads,
+  watchlist,
+  alerts,
   pendingRatings,
 }: {
   listings: BazaarListingDto[];
@@ -39,11 +44,15 @@ export function ManageDesk({
   orders: OrderDto[];
   escrows: ContractDto[];
   threads: BazaarThreadDto[];
+  watchlist: WatchEntryDto[];
+  alerts: PriceAlertDto[];
   pendingRatings: { saleId: string; counterpartyName: string; title: string }[];
 }) {
   // Conversations open first when any are waiting: somebody is holding a question, and an
   // unanswered buyer goes back to Discord and doesn't return.
-  const [tab, setTab] = useState<Tab>(threads.some((t) => t.unread) ? "messages" : "selling");
+  const [tab, setTab] = useState<Tab>(
+    threads.some((t) => t.unread) ? "messages" : alerts.some((a) => !a.read) ? "watchlist" : "selling",
+  );
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
@@ -73,6 +82,7 @@ export function ManageDesk({
   const counts = useMemo(
     () => ({
       messages: threads.filter((t) => t.unread).length,
+      watchlist: alerts.filter((a) => !a.read).length,
       selling: listings.filter((l) => l.status === "active" || l.status === "paused").length,
       sales: sales.filter((s) => s.status === "pending" && !(s.isSeller ? s.sellerConfirmed : s.buyerConfirmed)).length,
       contracts: serviceContracts.filter(
@@ -83,7 +93,7 @@ export function ManageDesk({
         escrows.filter((e) => e.status === "escrow" && !e.iConfirmed).length +
         orders.filter((o) => o.status === "active" || o.status === "paused").length,
     }),
-    [listings, sales, serviceContracts, orders, escrows, threads],
+    [listings, sales, serviceContracts, orders, escrows, threads, alerts],
   );
 
   const TABS: { id: Tab; label: string; count: number }[] = [
@@ -92,6 +102,7 @@ export function ManageDesk({
     { id: "sales", label: "Bazaar sales", count: counts.sales },
     { id: "contracts", label: "Contracts", count: counts.contracts },
     { id: "orders", label: "Market orders", count: counts.orders },
+    { id: "watchlist", label: "Watchlist", count: counts.watchlist },
   ];
 
   return (
@@ -124,6 +135,7 @@ export function ManageDesk({
       {tab === "sales" && <SalesTab sales={sales} busy={busy} onAct={patch} />}
       {tab === "contracts" && <ContractsTab contracts={serviceContracts} busy={busy} onAct={patch} />}
       {tab === "orders" && <OrdersTab orders={orders} escrows={escrows} busy={busy} onAct={patch} />}
+      {tab === "watchlist" && <WatchlistPanel entries={watchlist} alerts={alerts} />}
     </div>
   );
 }
