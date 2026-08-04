@@ -5,6 +5,7 @@ import {
   bazaarBids,
   bazaarEvents,
   bazaarItems,
+  bazaarListingComponents,
   bazaarListingImages,
   bazaarListings,
   bazaarRatings,
@@ -88,6 +89,8 @@ export const EMPTY_BAZAAR_STANDING: BazaarStanding = {
 
 export type BazaarListingDto = {
   id: string;
+  /** "sell" = for sale, "buy" = a standing wanted ad backed by committed aUEC. */
+  intent: string;
   title: string;
   /** Catalogue entry this listing is of, when the seller named one. */
   itemId: number | null;
@@ -119,6 +122,8 @@ export type BazaarListingDto = {
   sellerStanding: BazaarStanding;
   /** Filenames, thumbnail first. Served through /api/uploads/bazaar/<filename>. */
   images: string[];
+  /** Fitted components, when the seller listed them. Empty on most listings. */
+  components: ListingComponentDto[];
   /** Viewer-relative flags, so the UI needn't re-derive them. */
   isSeller: boolean;
   isHighBidder: boolean;
@@ -130,6 +135,8 @@ export type BazaarListingDto = {
 
 export type BazaarListOptions = {
   viewerId?: string | null;
+  /** "sell" for the shop, "buy" for wanted ads, null for both. */
+  intent?: string | null;
   category?: string | null;
   /** Free-text match on title and description. */
   search?: string | null;
@@ -143,6 +150,7 @@ export type BazaarListOptions = {
 
 type ListingRow = {
   id: string;
+  intent: string;
   title: string;
   item_id: string | null;
   item_name: string | null;
@@ -179,6 +187,7 @@ function toListingDto(r: ListingRow, viewer: string | null, standing: BazaarStan
   const buyNowPrice = r.buy_now_price != null ? Number(r.buy_now_price) : null;
   return {
     id: r.id,
+    intent: r.intent,
     title: r.title,
     itemId: r.item_id != null ? Number(r.item_id) : null,
     itemName: r.item_name,
@@ -211,6 +220,9 @@ function toListingDto(r: ListingRow, viewer: string | null, standing: BazaarStan
     sellerVerified: r.seller_verified,
     sellerStanding: standing,
     images: r.images ?? [],
+    // Loadouts are a detail-page concern; joining them into every board card would be one
+    // query per tile for something the grid doesn't draw. getBazaarListing fills this in.
+    components: [],
     isSeller: viewer != null && r.seller_id === viewer,
     isHighBidder: viewer != null && r.current_bidder_id === viewer,
     myBid: r.my_bid != null ? Number(r.my_bid) : null,
@@ -223,7 +235,7 @@ function toListingDto(r: ListingRow, viewer: string | null, standing: BazaarStan
 /** The shared SELECT behind both the board and a single listing. */
 function listingSelect(viewer: string | null) {
   return sql`
-    SELECT l.id::text, l.title, l.item_id::text, it.name AS item_name,
+    SELECT l.id::text, l.intent, l.title, l.item_id::text, it.name AS item_name,
            l.description, l.category, l.listing_type,
            l.buy_now_price::text, l.start_price::text, l.current_bid::text,
            l.current_bidder_id::text, hb.display_name AS current_bidder_name,
@@ -275,6 +287,7 @@ export async function listBazaarListings(db: Db, opts: BazaarListOptions = {}): 
   const rows = await db.execute<ListingRow>(sql`
     ${listingSelect(viewer)}
     WHERE l.status IN (${sql.join(statuses.map((s) => sql`${s}`), sql`, `)})
+      ${opts.intent ? sql`AND l.intent = ${opts.intent}` : sql``}
       ${opts.category ? sql`AND l.category = ${opts.category}` : sql``}
       ${opts.listingType ? sql`AND l.listing_type = ${opts.listingType}` : sql``}
       ${opts.sellerId ? sql`AND l.seller_id = ${opts.sellerId}::uuid` : sql``}
@@ -301,8 +314,13 @@ export async function getBazaarListing(
   `);
   const row = rows.rows[0];
   if (!row) return null;
-  const standings = await bazaarStandingFor(db, [row.seller_id]);
-  return toListingDto(row, viewer, standings.get(row.seller_id) ?? EMPTY_BAZAAR_STANDING);
+  const [standings, components] = await Promise.all([
+    bazaarStandingFor(db, [row.seller_id]),
+    listingComponents(db, row.id),
+  ]);
+  const dto = toListingDto(row, viewer, standings.get(row.seller_id) ?? EMPTY_BAZAAR_STANDING);
+  dto.components = components;
+  return dto;
 }
 
 export type BazaarResult = { ok: true; saleId?: string; listingId?: string } | { ok: false; error: string };
@@ -435,15 +453,31 @@ export async function placeBazaarBid(
   });
 }
 
-/** Take a listing at its asking price. Creates the sale both parties then have to confirm. */
-export async function buyBazaarNow(
+/**
+ * Take a listing at its stated price. Creates the sale both parties then have to confirm.
+ *
+ * Works from either end. On a `sell` listing the taker is the buyer and pays; on a `buy`
+ * listing — a wanted ad — the taker is the SELLER supplying the goods, and the poster is
+ * the one paying. Getting that backwards would commit the wrong person's aUEC, which is why
+ * the roles are derived from `intent` rather than from who owns the listing.
+ *
+ * The wanted-ad case needs no capacity check here: posting the ad already committed the
+ * money, and decrementing `remaining_quantity` releases exactly what the new sale commits.
+ * Re-checking would count the same aUEC twice and reject the fill it was reserved for.
+ */
+export async function takeBazaarListing(
   db: Db,
-  opts: { listingId: string; buyerId: string; quantity: number },
+  opts: { listingId: string; takerId: string; quantity: number },
 ): Promise<BazaarResult> {
   return db.transaction(async (tx) => {
     const [l] = await tx.select().from(bazaarListings).where(eq(bazaarListings.id, opts.listingId)).for("update");
     if (!l) return { ok: false as const, error: "Listing not found" };
-    if (l.sellerId === opts.buyerId) return { ok: false as const, error: "You can't buy your own listing" };
+    if (l.sellerId === opts.takerId) {
+      return {
+        ok: false as const,
+        error: l.intent === "buy" ? "That's your own wanted ad" : "You can't buy your own listing",
+      };
+    }
     if (!buyNowAvailable(l)) {
       if (l.listingType === "auction_buy_now" && l.bidCount > 0) {
         return { ok: false as const, error: "Bidding has started — this one goes to the highest bidder now." };
@@ -460,12 +494,19 @@ export async function buyBazaarNow(
 
     const unitPrice = l.buyNowPrice!;
     const total = unitPrice * qty;
-    const available = await availableAuec(tx, opts.buyerId);
-    if (total > available) {
-      return {
-        ok: false as const,
-        error: `That costs ${total.toLocaleString()} aUEC but you have ${Math.max(0, available).toLocaleString()} free — orders, contracts and bids are already committed against your declared balance.`,
-      };
+    // The poster pays on a wanted ad; the taker pays on a sale.
+    const wantedAd = l.intent === "buy";
+    const buyerId = wantedAd ? l.sellerId : opts.takerId;
+    const sellerId = wantedAd ? opts.takerId : l.sellerId;
+
+    if (!wantedAd) {
+      const available = await availableAuec(tx, buyerId);
+      if (total > available) {
+        return {
+          ok: false as const,
+          error: `That costs ${total.toLocaleString()} aUEC but you have ${Math.max(0, available).toLocaleString()} free — orders, contracts and bids are already committed against your declared balance.`,
+        };
+      }
     }
 
     const now = new Date();
@@ -474,8 +515,8 @@ export async function buyBazaarNow(
       .insert(bazaarSales)
       .values({
         listingId: l.id,
-        sellerId: l.sellerId,
-        buyerId: opts.buyerId,
+        sellerId,
+        buyerId,
         seasonId: l.seasonId,
         origin: "buy_now",
         quantity: qty,
@@ -493,9 +534,9 @@ export async function buyBazaarNow(
     await tx.insert(bazaarEvents).values({
       listingId: l.id,
       saleId: sale!.id,
-      actorId: opts.buyerId,
+      actorId: opts.takerId,
       type: "bought",
-      data: { quantity: qty, unitPrice, total },
+      data: { quantity: qty, unitPrice, total, intent: l.intent },
     });
     return { ok: true as const, saleId: sale!.id, listingId: l.id };
   });
@@ -1170,6 +1211,129 @@ export async function itemPriceHistory(
       origin: r.origin,
     })),
   };
+}
+
+/* -------------------------------- Loadouts ---------------------------------- */
+
+export type ListingComponentDto = {
+  id: number;
+  itemId: number;
+  name: string;
+  section: string | null;
+  category: string | null;
+  slotLabel: string | null;
+  quantity: number;
+};
+
+/** What's fitted to a listing, in the order the seller arranged it. */
+export async function listingComponents(db: Db, listingId: string): Promise<ListingComponentDto[]> {
+  const rows = await db.execute<{
+    id: string; item_id: string; name: string; section: string | null;
+    category: string | null; slot_label: string | null; quantity: number;
+  }>(sql`
+    SELECT c.id::text, c.item_id::text, i.name, i.section, i.category, c.slot_label, c.quantity
+    FROM bazaar_listing_components c
+    JOIN bazaar_items i ON i.id = c.item_id
+    WHERE c.listing_id = ${listingId}::uuid
+    ORDER BY c.sort_index, c.id
+  `);
+  return rows.rows.map((r) => ({
+    id: Number(r.id),
+    itemId: Number(r.item_id),
+    name: r.name,
+    section: r.section,
+    category: r.category,
+    slotLabel: r.slot_label,
+    quantity: r.quantity,
+  }));
+}
+
+export const MAX_LISTING_COMPONENTS = 40;
+
+/**
+ * Replace a listing's loadout wholesale.
+ *
+ * A full replace rather than add/remove endpoints: the seller edits a list in front of them
+ * and saves it, and reconciling that into a diff on the client is how the two copies drift.
+ * Ordering comes from the array, so "what's fitted, in the order I care about" survives.
+ */
+export async function setListingComponents(
+  db: Db,
+  opts: {
+    listingId: string;
+    sellerId: string;
+    components: { itemId: number; slotLabel?: string | null; quantity?: number }[];
+  },
+): Promise<BazaarResult> {
+  if (opts.components.length > MAX_LISTING_COMPONENTS) {
+    return { ok: false, error: `Up to ${MAX_LISTING_COMPONENTS} components per listing` };
+  }
+  return db.transaction(async (tx) => {
+    const [l] = await tx.select().from(bazaarListings).where(eq(bazaarListings.id, opts.listingId)).for("update");
+    if (!l) return { ok: false as const, error: "Listing not found" };
+    if (l.sellerId !== opts.sellerId) return { ok: false as const, error: "Not your listing" };
+    if (!["active", "paused"].includes(l.status)) {
+      return { ok: false as const, error: "This listing is closed" };
+    }
+
+    // Every component has to be a real catalogue entry — this is the whole point of the
+    // feature, and a free-text list would just be the description again.
+    const ids = [...new Set(opts.components.map((c) => c.itemId))];
+    if (ids.length > 0) {
+      const found = await tx
+        .select({ id: bazaarItems.id })
+        .from(bazaarItems)
+        .where(sql`${bazaarItems.id} IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})`);
+      if (found.length !== ids.length) {
+        return { ok: false as const, error: "One of those components isn't in the catalogue" };
+      }
+    }
+
+    await tx.delete(bazaarListingComponents).where(eq(bazaarListingComponents.listingId, l.id));
+    if (opts.components.length > 0) {
+      await tx.insert(bazaarListingComponents).values(
+        opts.components.map((c, i) => ({
+          listingId: l.id,
+          itemId: c.itemId,
+          slotLabel: c.slotLabel?.trim().slice(0, 60) || null,
+          quantity: Math.max(1, Math.floor(c.quantity ?? 1)),
+          sortIndex: i,
+        })),
+      );
+    }
+    await tx.insert(bazaarEvents).values({
+      listingId: l.id,
+      actorId: opts.sellerId,
+      type: "edited",
+      data: { components: opts.components.length },
+    });
+    return { ok: true as const, listingId: l.id };
+  });
+}
+
+/**
+ * Listings that carry a given component — "who's selling a ship with this quantum drive".
+ *
+ * The reason the loadout is structured at all. Prose can't answer this.
+ */
+export async function listingsWithComponent(
+  db: Db,
+  itemId: number,
+  opts: { viewerId?: string | null; limit?: number } = {},
+): Promise<BazaarListingDto[]> {
+  const rows = await db.execute<{ id: string }>(sql`
+    SELECT DISTINCT l.id::text
+    FROM bazaar_listings l
+    JOIN bazaar_listing_components c ON c.listing_id = l.id
+    WHERE c.item_id = ${itemId} AND l.status = 'active'
+    LIMIT ${Math.min(opts.limit ?? 50, 200)}
+  `);
+  const out: BazaarListingDto[] = [];
+  for (const r of rows.rows) {
+    const dto = await getBazaarListing(db, r.id, opts.viewerId ?? null);
+    if (dto) out.push(dto);
+  }
+  return out;
 }
 
 /** Images on a listing, thumbnail first. */

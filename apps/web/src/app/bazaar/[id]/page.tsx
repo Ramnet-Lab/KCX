@@ -1,4 +1,4 @@
-import { getBazaarListing, getDb } from "@kcx/db";
+import { getBazaarListing, getDb, myThreadForListing } from "@kcx/db";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { BazaarDetail } from "@/components/bazaar-detail";
@@ -25,12 +25,22 @@ export default async function BazaarListingPage({ params }: { params: Promise<{ 
   const user = await currentUser();
 
   let listing = null;
+  let myThreadId: string | null = null;
   try {
-    listing = await getBazaarListing(getDb(), id, user?.id ?? null);
+    const db = getDb();
+    listing = await getBazaarListing(db, id, user?.id ?? null);
+    if (user && listing) myThreadId = (await myThreadForListing(db, id, user.id))?.id ?? null;
   } catch (err) {
     console.error("[bazaar listing page]", err instanceof Error ? err.message : err);
   }
   if (!listing) notFound();
 
-  return <BazaarDetail listing={listing} signedIn={!!user} verified={!!user?.isVerified} />;
+  return (
+    <BazaarDetail
+      listing={listing}
+      signedIn={!!user}
+      verified={!!user?.isVerified}
+      myThreadId={myThreadId}
+    />
+  );
 }

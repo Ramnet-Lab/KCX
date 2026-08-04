@@ -38,6 +38,10 @@ export const BAZAAR_CATEGORY_LABELS: Record<BazaarCategory, string> = {
 export const BAZAAR_LISTING_TYPES = ["buy_now", "auction", "auction_buy_now"] as const;
 export type BazaarListingType = (typeof BAZAAR_LISTING_TYPES)[number];
 
+/** Which way a listing points: offering goods, or offering money for goods. */
+export const BAZAAR_INTENTS = ["sell", "buy"] as const;
+export type BazaarIntent = (typeof BAZAAR_INTENTS)[number];
+
 export const BAZAAR_TITLE_MAX = 120;
 export const BAZAAR_DESCRIPTION_MAX = 4000;
 /** Ships and fleet packages clear well past a billion, so the ceiling is generous. */
@@ -79,6 +83,7 @@ const base = {
 export const bazaarCreateInput = z
   .object({
     ...base,
+    intent: z.enum(BAZAAR_INTENTS).default("sell"),
     listingType: z.enum(BAZAAR_LISTING_TYPES).default("buy_now"),
     buyNowPrice: z.number().int().positive().max(BAZAAR_MAX_PRICE).optional(),
     startPrice: z.number().int().positive().max(BAZAAR_MAX_PRICE).optional(),
@@ -104,7 +109,18 @@ export const bazaarCreateInput = z
       message: "The buy-it-now price has to be above the starting bid",
       path: ["buyNowPrice"],
     },
-  );
+  )
+  .refine((v) => v.intent === "sell" || v.listingType === "buy_now", {
+    // Letting sellers bid a wanted ad DOWN is a reverse auction — a different mechanism with
+    // a different fairness argument, and not something to acquire by combining two flags.
+    message: "A wanted ad is a fixed offer, not an auction",
+    path: ["listingType"],
+  })
+  .refine((v) => v.intent === "sell" || v.itemId != null || (v.itemName?.length ?? 0) > 0, {
+    // "I want to buy something" is not an offer anyone can fill.
+    message: "Name the item you want to buy",
+    path: ["itemName"],
+  });
 export type BazaarCreateInput = z.infer<typeof bazaarCreateInput>;
 
 /**

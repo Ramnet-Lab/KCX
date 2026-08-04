@@ -69,6 +69,68 @@ the record stays, counting against both parties' settled-sales ratio. A failed *
 does not reopen bidding: it already ran its course, every other bidder has moved on, and
 restarting it would leave a clock in the past. The seller relists.
 
+## Negotiation
+
+Settlement used to assume two people had already agreed — but there was nowhere in the
+product to do the agreeing, so it happened on Discord where nothing could be recorded,
+priced, or held against anyone. A price that emerges from a conversation nobody can see is
+a price the exchange cannot stand behind.
+
+Each listing carries one **thread per interested trader**, private to those two and
+moderators. A non-party gets a 404, not a 403: whether a negotiation exists between two
+other people is itself private, and the id is all that separates them from everyone else.
+
+Offers live on messages rather than in their own table, because an offer *is* a thing
+somebody said — split them apart and you get two histories that have to be interleaved to be
+read, and the interleaving is the conversation. Three rules:
+
+| Rule | Why |
+|---|---|
+| Either side may offer; only the **other** side may accept | Otherwise someone offers and instantly accepts their own number, turning a negotiation into a unilateral price change — and manufacturing a settled print at any figure they like. |
+| **One live offer per thread**; a new one supersedes the last | With two open, accepting one silently rejects the other and the parties can disagree about which was on the table. |
+| Acceptance strikes the sale and commits the buyer's aUEC | From there it is an ordinary bazaar sale: meet in-game, both confirm. |
+
+Messaging requires RSI verification. An unverified account is free to create, so without the
+gate the cheapest way to spam every seller on the board would be to make one.
+
+## Wanted ads
+
+A listing has an `intent`: `sell` (the classifieds default) or `buy` — a standing wanted ad.
+
+The wanted ad is the more interesting half, because **the money behind it is committed**
+against the poster's declared balance for as long as it stands, on the units still wanted.
+A wanted ad nobody has to back is a wish; this one is an offer, and a seller can act on it.
+
+Roles are derived from `intent`, never from who owns the listing: on a wanted ad the poster
+is the **buyer** and whoever fills it is the seller. Getting that backwards would commit the
+wrong person's aUEC. Filling one runs no fresh capacity check — posting the ad already
+reserved the money, and decrementing `remaining_quantity` releases exactly what the new sale
+commits, so re-checking would count the same aUEC twice and reject the fill it was reserved
+for.
+
+Wanted ads are fixed-price only. Letting sellers bid one *down* is a reverse auction — a
+different mechanism with a different fairness argument, already built for service contracts
+as sealed bidding — and not something to acquire by combining two flags.
+
+> **Naming wart.** `bazaar_listings.seller_id` means *poster*, which is the buyer on a
+> wanted ad. Renaming it would touch every query, index and DTO for a board that is still
+> overwhelmingly sell-side, so it keeps its name and carries a warning. `bazaar_sales`
+> records the true buyer and seller per sale; that, not the listing, is what settlement and
+> collateral run on.
+
+## Loadouts
+
+"Fully kitted" tells a buyer nothing they can check, compare, or search. A listing can carry
+up to 40 components, each pointing at a real catalogue entry, which is what makes *which
+ships are listed with this quantum drive* answerable at all.
+
+Saving replaces the list wholesale rather than exposing add/remove endpoints — the seller
+edits a list in front of them and saves it, and turning that into a diff on the client is how
+the two copies drift apart.
+
+Nothing verifies any of it. Star Citizen exposes no inventory API, so this is still the
+seller's claim — just one specific enough to be *wrong* about, and therefore worth something.
+
 ## The item catalogue
 
 A listing title is an advertisement — "Drake Cutlass Black — fully kitted, S4 shields" — and
@@ -151,6 +213,12 @@ Defined in `packages/db/src/queries/bazaar.ts` and `packages/shared/src/bazaar.t
 | `BAZAAR_MAX_HOURS` | 720 |
 | Catalogue sync | daily, 04:00 UTC (`apps/server/src/jobs/sync-items.ts`) |
 | Player-entry prune | unused for 30 days |
+| `MESSAGE_MAX` | 2000 |
+| `MAX_LISTING_COMPONENTS` | 40 |
+
+`pnpm check:bazaar` exercises the negotiation, wanted-ad and loadout invariants end to end
+against a development database. It writes and deletes rows, so it requires
+`ALLOW_DESTRUCTIVE_CHECKS=true`.
 
 ## Known limits
 

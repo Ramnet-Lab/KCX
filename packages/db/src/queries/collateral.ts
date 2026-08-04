@@ -78,6 +78,16 @@ const COMMITTED_AUEC = (userId: string) => sql`(
       FROM bazaar_sales bs
       WHERE bs.buyer_id = ${userId} AND bs.status = 'pending'
     ), 0)
+    +
+    coalesce((
+      -- Standing wanted ads. This is what separates "I'll pay 40M for a Polaris" from a
+      -- wish: the money is committed for as long as the ad is up, on the units still
+      -- wanted rather than the original count.
+      SELECT sum(bl.remaining_quantity::bigint * bl.buy_now_price)
+      FROM bazaar_listings bl
+      WHERE bl.seller_id = ${userId} AND bl.intent = 'buy'
+        AND bl.status IN ('active','paused') AND bl.buy_now_price IS NOT NULL
+    ), 0)
 )`;
 
 /** SCU of one commodity promised elsewhere: unreserved sell orders + escrows they must ship. */

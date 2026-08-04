@@ -1,13 +1,14 @@
 import {
   bazaarEvents,
   bazaarListings,
+  buyCapacity,
   gameVersions,
   getBazaarItem,
   getDb,
   listBazaarListings,
   resolveOrCreateItem,
 } from "@kcx/db";
-import { BAZAAR_CATEGORIES, BAZAAR_LISTING_TYPES, bazaarCreateInput } from "@kcx/shared";
+import { BAZAAR_CATEGORIES, BAZAAR_INTENTS, BAZAAR_LISTING_TYPES, bazaarCreateInput } from "@kcx/shared";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/session";
@@ -26,6 +27,7 @@ export async function GET(request: Request) {
   // reach SQL, and an unvalidated sort key is the one that would reach it as an identifier.
   const category = BAZAAR_CATEGORIES.find((c) => c === q.get("category")) ?? null;
   const listingType = BAZAAR_LISTING_TYPES.find((t) => t === q.get("type")) ?? null;
+  const intent = BAZAAR_INTENTS.find((i) => i === q.get("intent")) ?? null;
   const sort = SORTS.find((s) => s === q.get("sort")) ?? "newest";
 
   try {
@@ -33,6 +35,7 @@ export async function GET(request: Request) {
       viewerId: user?.id ?? null,
       category,
       listingType,
+      intent,
       sort,
       search: q.get("q"),
       mineOnly: q.get("mine") === "1",
@@ -74,6 +77,23 @@ export async function POST(request: Request) {
   const isAuction = input.listingType !== "buy_now";
   const runsUntil = new Date(Date.now() + input.runForHours * 3_600_000);
 
+  // A wanted ad is an offer, not a wish: the money behind it is committed for as long as it
+  // stands, so it has to be there when it goes up. Sell listings post no collateral — an
+  // arbitrary item isn't a declared holding the exchange can check.
+  if (input.intent === "buy") {
+    const cost = (input.buyNowPrice ?? 0) * input.quantity;
+    const capacity = await buyCapacity(db, user.id);
+    if (cost > capacity.available) {
+      return NextResponse.json(
+        {
+          error: `That wanted ad commits ${cost.toLocaleString()} aUEC but you have ${Math.max(0, capacity.available).toLocaleString()} free — your orders, contracts, bids and other wanted ads are already committed against your declared balance.`,
+          capacity,
+        },
+        { status: 409 },
+      );
+    }
+  }
+
   // Resolve the catalogue entry before anything is written. A picked id is used as given; a
   // typed name is matched on its normalised key and only creates a row when it is genuinely
   // the first of its kind — that is what stops "P4-AR" and "p4 ar" becoming two items with
@@ -94,7 +114,9 @@ export async function POST(request: Request) {
       const [created] = await tx
         .insert(bazaarListings)
         .values({
+          // `sellerId` is the POSTER — the buyer on a wanted ad. See schema/bazaar.ts.
           sellerId: user.id,
+          intent: input.intent,
           seasonId: season.id,
           itemId,
           title: input.title,
@@ -117,6 +139,7 @@ export async function POST(request: Request) {
         actorId: user.id,
         type: "listed",
         data: {
+          intent: input.intent,
           listingType: input.listingType,
           buyNowPrice: input.buyNowPrice ?? null,
           startPrice: input.startPrice ?? null,

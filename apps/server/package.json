@@ -8,7 +8,8 @@
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts",
     "ingest": "tsx src/scripts/ingest.ts",
-    "sync:items": "tsx src/scripts/sync-items.ts"
+    "sync:items": "tsx src/scripts/sync-items.ts",
+    "check:bazaar": "tsx src/scripts/check-bazaar.ts"
   },
   "dependencies": {
     "@kcx/db": "workspace:*",

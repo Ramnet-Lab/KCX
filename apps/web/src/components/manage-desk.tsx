@@ -1,14 +1,21 @@
 "use client";
 
-import type { BazaarListingDto, BazaarSaleDto, ContractDto, ServiceContractDto } from "@kcx/db";
+import type {
+  BazaarListingDto,
+  BazaarSaleDto,
+  BazaarThreadDto,
+  ContractDto,
+  ServiceContractDto,
+} from "@kcx/db";
 import { BAZAAR_CATEGORY_LABELS, type BazaarCategory, type OrderDto } from "@kcx/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
+import { BazaarThreadPanel } from "@/components/bazaar-thread";
 import { StarPicker } from "@/components/trader-standing";
 import { fmtAuec, timeLeft } from "@/lib/countdown";
 
-type Tab = "selling" | "sales" | "contracts" | "orders";
+type Tab = "messages" | "selling" | "sales" | "contracts" | "orders";
 
 /**
  * The trader's own desk.
@@ -23,6 +30,7 @@ export function ManageDesk({
   serviceContracts,
   orders,
   escrows,
+  threads,
   pendingRatings,
 }: {
   listings: BazaarListingDto[];
@@ -30,9 +38,12 @@ export function ManageDesk({
   serviceContracts: ServiceContractDto[];
   orders: OrderDto[];
   escrows: ContractDto[];
+  threads: BazaarThreadDto[];
   pendingRatings: { saleId: string; counterpartyName: string; title: string }[];
 }) {
-  const [tab, setTab] = useState<Tab>("selling");
+  // Conversations open first when any are waiting: somebody is holding a question, and an
+  // unanswered buyer goes back to Discord and doesn't return.
+  const [tab, setTab] = useState<Tab>(threads.some((t) => t.unread) ? "messages" : "selling");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
@@ -61,6 +72,7 @@ export function ManageDesk({
   // anything, and the point of the badge is to pull someone to the tab with work in it.
   const counts = useMemo(
     () => ({
+      messages: threads.filter((t) => t.unread).length,
       selling: listings.filter((l) => l.status === "active" || l.status === "paused").length,
       sales: sales.filter((s) => s.status === "pending" && !(s.isSeller ? s.sellerConfirmed : s.buyerConfirmed)).length,
       contracts: serviceContracts.filter(
@@ -71,10 +83,11 @@ export function ManageDesk({
         escrows.filter((e) => e.status === "escrow" && !e.iConfirmed).length +
         orders.filter((o) => o.status === "active" || o.status === "paused").length,
     }),
-    [listings, sales, serviceContracts, orders, escrows],
+    [listings, sales, serviceContracts, orders, escrows, threads],
   );
 
   const TABS: { id: Tab; label: string; count: number }[] = [
+    { id: "messages", label: "Messages", count: counts.messages },
     { id: "selling", label: "Selling", count: counts.selling },
     { id: "sales", label: "Bazaar sales", count: counts.sales },
     { id: "contracts", label: "Contracts", count: counts.contracts },
@@ -106,6 +119,7 @@ export function ManageDesk({
         <RateSales pending={pendingRatings} onDone={() => router.refresh()} />
       )}
 
+      {tab === "messages" && <MessagesTab threads={threads} onChanged={() => router.refresh()} />}
       {tab === "selling" && <SellingTab listings={listings} busy={busy} onAct={patch} />}
       {tab === "sales" && <SalesTab sales={sales} busy={busy} onAct={patch} />}
       {tab === "contracts" && <ContractsTab contracts={serviceContracts} busy={busy} onAct={patch} />}
@@ -123,6 +137,89 @@ const btnGo = "tap rounded bg-up/20 px-2 py-1 font-bold text-up hover:bg-up/30 d
 function Empty({ children }: { children: React.ReactNode }) {
   return (
     <div className="rounded border border-dashed border-line p-8 text-center text-sm text-ink-faint">{children}</div>
+  );
+}
+
+/* --------------------------------- Messages --------------------------------- */
+
+/**
+ * Conversations, master–detail.
+ *
+ * Unread first regardless of recency: the ordering people need is "who is waiting on me",
+ * not "what happened last". A busy seller scrolling a chronological list to find the one
+ * question nobody answered is how the question stays unanswered.
+ */
+function MessagesTab({ threads, onChanged }: { threads: BazaarThreadDto[]; onChanged: () => void }) {
+  const ordered = useMemo(
+    () =>
+      [...threads].sort((a, b) => {
+        if (a.unread !== b.unread) return a.unread ? -1 : 1;
+        return b.lastMessageAt.localeCompare(a.lastMessageAt);
+      }),
+    [threads],
+  );
+  const [selected, setSelected] = useState<string | null>(ordered[0]?.id ?? null);
+
+  if (threads.length === 0) {
+    return (
+      <Empty>
+        <p className="mb-1 text-ink">No conversations.</p>
+        <p>When somebody asks about one of your listings — or you ask about theirs — it lands here.</p>
+      </Empty>
+    );
+  }
+
+  return (
+    <div className="grid gap-3 lg:grid-cols-[18rem_minmax(0,1fr)]">
+      <div className="max-h-[32rem] space-y-1 overflow-y-auto">
+        {ordered.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setSelected(t.id)}
+            className={`tap w-full rounded border p-2 text-left ${
+              selected === t.id ? "border-accent/60 bg-panel-2" : "border-line bg-panel hover:border-ink-faint"
+            }`}
+          >
+            <div className="flex items-start gap-2">
+              {t.thumbnail ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={`/api/uploads/bazaar/${t.thumbnail}`}
+                  alt=""
+                  className="h-8 w-8 shrink-0 rounded border border-line object-cover"
+                />
+              ) : (
+                <span className="h-8 w-8 shrink-0 rounded border border-line bg-panel-2" />
+              )}
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-xs font-bold text-ink">{t.listingTitle}</span>
+                <span className="block truncate text-[11px] text-ink-faint">
+                  {t.isOwner ? "from" : "with"} {t.otherPartyName}
+                  {t.listingIntent === "buy" && " · wanted ad"}
+                </span>
+              </span>
+              {t.unread && <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-accent" aria-label="unread" />}
+            </div>
+          </button>
+        ))}
+      </div>
+
+      <div className="rounded border border-line bg-panel p-3">
+        {selected ? (
+          <>
+            <Link
+              href={`/bazaar/${ordered.find((t) => t.id === selected)?.listingId ?? ""}`}
+              className="mb-2 inline-block text-xs text-ink-faint hover:text-accent"
+            >
+              open the listing ↗
+            </Link>
+            <BazaarThreadPanel key={selected} threadId={selected} onChanged={onChanged} />
+          </>
+        ) : (
+          <p className="text-xs text-ink-faint">Pick a conversation.</p>
+        )}
+      </div>
+    </div>
   );
 }
 

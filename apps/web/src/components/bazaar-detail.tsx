@@ -11,6 +11,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ItemPriceHistory } from "@/components/bazaar-item-picker";
+import { LoadoutEditor, LoadoutList } from "@/components/bazaar-loadout";
+import { StartBazaarThread } from "@/components/bazaar-thread";
 import { BazaarStandingBadge } from "@/components/trader-standing";
 import { countdown, fmtAuec, isClosingSoon, timeLeft } from "@/lib/countdown";
 
@@ -27,10 +29,12 @@ export function BazaarDetail({
   listing: initial,
   signedIn,
   verified,
+  myThreadId = null,
 }: {
   listing: BazaarListingDto;
   signedIn: boolean;
   verified: boolean;
+  myThreadId?: string | null;
 }) {
   const [l, setListing] = useState(initial);
   const [active, setActive] = useState(0);
@@ -138,6 +142,8 @@ export function BazaarDetail({
             {l.description && (
               <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-ink-dim">{l.description}</p>
             )}
+            <LoadoutList components={l.components} />
+
             <dl className="mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
               <div>
                 <dt className="text-ink-faint">Seller</dt>
@@ -193,15 +199,24 @@ export function BazaarDetail({
               </>
             ) : (
               <>
-                <div className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">Price</div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">
+                  {l.intent === "buy" ? "Offered" : "Price"}
+                </div>
                 <div className="num text-2xl font-bold text-up">
                   {fmtAuec(l.buyNowPrice ?? 0)}
                   <span className="ml-1 text-sm font-normal text-ink-dim">aUEC{l.quantity > 1 ? " each" : ""}</span>
                 </div>
-                {l.quantity > 1 && (
+                {l.intent === "buy" ? (
                   <div className="mt-1 text-[11px] text-ink-faint">
-                    {l.remainingQuantity} of {l.quantity} still available
+                    Wants {l.remainingQuantity}. This aUEC is committed against the buyer&apos;s
+                    declared balance while the ad stands — it is an offer, not a wish.
                   </div>
+                ) : (
+                  l.quantity > 1 && (
+                    <div className="mt-1 text-[11px] text-ink-faint">
+                      {l.remainingQuantity} of {l.quantity} still available
+                    </div>
+                  )
                 )}
               </>
             )}
@@ -226,7 +241,7 @@ export function BazaarDetail({
                     onClick={() => router.push("/signin")}
                     className="tap w-full rounded bg-accent/20 px-3 py-2 text-sm font-bold text-accent hover:bg-accent/30"
                   >
-                    Sign in to buy or bid
+                    {l.intent === "buy" ? "Sign in to fill this" : "Sign in to buy or bid"}
                   </button>
                 ) : !verified ? (
                   <p className="rounded border border-accent/40 bg-accent/10 px-2 py-1.5 text-[11px] text-accent">
@@ -291,6 +306,17 @@ export function BazaarDetail({
             </p>
           </div>
 
+          {/* The negotiation, in the product rather than on Discord. Everything below the
+              price panel because the asking price is what someone came to see first. */}
+          <StartBazaarThread
+            listingId={l.id}
+            existingThreadId={myThreadId}
+            signedIn={signedIn}
+            verified={verified}
+            isOwner={l.isSeller}
+            intent={l.intent}
+          />
+
           {/* What one of these has actually gone for, next to what this one is asking. A
               buyer deciding whether the price is fair needs both numbers in one place. */}
           {l.itemId != null && (
@@ -302,7 +328,16 @@ export function BazaarDetail({
             </div>
           )}
 
-          {l.isSeller && <SellerPanel listing={l} busy={busy} onAct={act} onChanged={refresh} onError={setError} />}
+          {l.isSeller && (
+            <SellerPanel
+              listing={l}
+              busy={busy}
+              onAct={act}
+              onChanged={refresh}
+              onError={setError}
+              onRefetch={refresh}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -387,7 +422,11 @@ function BuyForm({
         disabled={busy}
         className="tap mt-2 w-full rounded bg-up/20 px-3 py-2 text-sm font-bold text-up hover:bg-up/30 disabled:opacity-40"
       >
-        {busy ? "…" : `Buy it now — ${fmtAuec(total)} aUEC`}
+        {busy
+          ? "…"
+          : l.intent === "buy"
+            ? `Sell it to them — ${fmtAuec(total)} aUEC`
+            : `Buy it now — ${fmtAuec(total)} aUEC`}
       </button>
     </div>
   );
@@ -400,12 +439,14 @@ function SellerPanel({
   onAct,
   onChanged,
   onError,
+  onRefetch,
 }: {
   listing: BazaarListingDto;
   busy: boolean;
   onAct: (action: string, extra?: Record<string, unknown>) => Promise<boolean>;
   onChanged: () => Promise<void>;
   onError: (msg: string | null) => void;
+  onRefetch: () => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(l.title);
@@ -654,6 +695,16 @@ function SellerPanel({
             />
           )}
         </div>
+      )}
+
+      {live && (
+        <LoadoutEditor
+          listingId={l.id}
+          initial={l.components}
+          onSaved={() => {
+            void onRefetch();
+          }}
+        />
       )}
 
       <p className="mt-3 text-[11px] text-ink-faint">

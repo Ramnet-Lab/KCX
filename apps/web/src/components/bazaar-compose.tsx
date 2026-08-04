@@ -6,6 +6,7 @@ import {
   BAZAAR_DEFAULT_HOURS,
   BAZAAR_DURATIONS,
   type BazaarCategory,
+  type BazaarIntent,
   type BazaarListingType,
 } from "@kcx/shared";
 import { useState } from "react";
@@ -33,6 +34,7 @@ const MODES: { value: BazaarListingType; label: string; blurb: string }[] = [
  * told which photo didn't make it.
  */
 export function BazaarCompose({ onPosted }: { onPosted: (id: string) => void }) {
+  const [intent, setIntent] = useState<BazaarIntent>("sell");
   const [item, setItem] = useState<PickedItem | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -80,7 +82,10 @@ export function BazaarCompose({ onPosted }: { onPosted: (id: string) => void }) 
     title.trim().length >= 4 &&
     (!hasBuyNow || buyNow > 0) &&
     (!isAuction || start > 0) &&
-    (listingType !== "auction_buy_now" || buyNow > start);
+    (listingType !== "auction_buy_now" || buyNow > start) &&
+    // "I want to buy something" is not an offer anyone can fill, so a wanted ad has to name
+    // the item. The server enforces this too — this only spares the round trip.
+    (intent === "sell" || item != null);
 
   const submit = async () => {
     setBusy(true);
@@ -90,6 +95,7 @@ export function BazaarCompose({ onPosted }: { onPosted: (id: string) => void }) 
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          intent,
           title: title.trim(),
           description: description.trim() || undefined,
           // An id when they picked from the list, a name when they typed one the catalogue
@@ -130,11 +136,45 @@ export function BazaarCompose({ onPosted }: { onPosted: (id: string) => void }) 
 
   return (
     <div className="mb-4 rounded border border-line bg-panel p-4">
-      <h2 className="mb-3 text-sm font-bold text-ink">List an item</h2>
+      <h2 className="mb-3 text-sm font-bold text-ink">
+        {intent === "buy" ? "Post a wanted ad" : "List an item"}
+      </h2>
       <div className="space-y-3">
         <div>
           <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">
-            Which item — pick it, or type its in-game name
+            Which way round
+          </span>
+          <div className="mt-1 flex gap-1">
+            <button
+              onClick={() => setIntent("sell")}
+              className={`tap flex-1 rounded border px-2 py-1.5 text-xs ${
+                intent === "sell" ? "border-accent text-accent" : "border-line text-ink-faint hover:text-ink-dim"
+              }`}
+            >
+              <span className="block font-bold">I&apos;m selling</span>
+              <span className="mt-0.5 block text-[10px] text-ink-faint">I have it, here&apos;s my price</span>
+            </button>
+            <button
+              onClick={() => {
+                setIntent("buy");
+                // A wanted ad is a fixed offer — see the reverse-auction note in the schema.
+                setListingType("buy_now");
+              }}
+              className={`tap flex-1 rounded border px-2 py-1.5 text-xs ${
+                intent === "buy" ? "border-accent text-accent" : "border-line text-ink-faint hover:text-ink-dim"
+              }`}
+            >
+              <span className="block font-bold">I&apos;m buying</span>
+              <span className="mt-0.5 block text-[10px] text-ink-faint">I want it, here&apos;s what I&apos;ll pay</span>
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">
+            {intent === "buy"
+              ? "What you're after — pick it, or type its in-game name"
+              : "Which item — pick it, or type its in-game name"}
           </span>
           <BazaarItemPicker
             value={item}
@@ -205,7 +245,7 @@ export function BazaarCompose({ onPosted }: { onPosted: (id: string) => void }) 
           )}
         </div>
 
-        <div>
+        <div className={intent === "buy" ? "hidden" : ""}>
           <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">How it sells</span>
           <div className="mt-1 grid gap-1 sm:grid-cols-3">
             {MODES.map((m) => (
@@ -243,7 +283,7 @@ export function BazaarCompose({ onPosted }: { onPosted: (id: string) => void }) 
           {hasBuyNow && (
             <label className="min-w-40 flex-1">
               <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">
-                {isAuction ? "Buy it now (aUEC)" : "Price each (aUEC)"}
+                {intent === "buy" ? "You'll pay each (aUEC)" : isAuction ? "Buy it now (aUEC)" : "Price each (aUEC)"}
               </span>
               <input
                 type="number"
@@ -344,11 +384,12 @@ export function BazaarCompose({ onPosted }: { onPosted: (id: string) => void }) 
             disabled={!valid || busy}
             className="tap rounded bg-accent/20 px-4 py-1.5 text-sm font-bold text-accent hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {busy ? "Listing…" : "List it"}
+            {busy ? "Posting…" : intent === "buy" ? "Post wanted ad" : "List it"}
           </button>
           <span className="text-[11px] text-ink-faint">
-            Nothing is held in escrow. You hand the item over in-game and you both confirm —
-            your settled-sales record is what backs the listing.
+            {intent === "buy"
+              ? `${fmtAuec(buyNow * qty || 0)} aUEC stays committed against your declared balance while this ad is up — that's what makes it an offer rather than a wish.`
+              : "Nothing is held in escrow. You hand the item over in-game and you both confirm — your settled-sales record is what backs the listing."}
           </span>
         </div>
       </div>

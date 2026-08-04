@@ -1,6 +1,8 @@
 import {
   getDb,
   listBazaarSales,
+  listBazaarThreads,
+  type BazaarThreadDto,
   listContracts,
   listContractsBoard,
   listOrders,
@@ -38,11 +40,12 @@ export default async function ManagePage() {
   let serviceContracts: ServiceContractDto[] = [];
   let orders: OrderDto[] = [];
   let escrows: ContractDto[] = [];
+  let threads: BazaarThreadDto[] = [];
   let toRate: { saleId: string; counterpartyName: string; title: string }[] = [];
 
   try {
     const db = getDb();
-    [listings, sales, serviceContracts, orders, escrows, toRate] = await Promise.all([
+    [listings, sales, serviceContracts, orders, escrows, threads, toRate] = await Promise.all([
       myBazaarListings(db, user.id),
       listBazaarSales(db, user.id),
       listContractsBoard(db, {
@@ -58,6 +61,7 @@ export default async function ManagePage() {
         limit: 300,
       }),
       listContracts(db, user.id),
+      listBazaarThreads(db, user.id),
       pendingBazaarRatings(db, user.id),
     ]);
   } catch (err) {
@@ -81,6 +85,7 @@ export default async function ManagePage() {
         serviceContracts={serviceContracts}
         orders={orders}
         escrows={escrows}
+        threads={threads}
         pendingRatings={toRate}
       />
     </>

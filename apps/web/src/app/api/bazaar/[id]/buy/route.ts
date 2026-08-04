@@ -1,4 +1,4 @@
-import { buyBazaarNow, getDb } from "@kcx/db";
+import { getDb, takeBazaarListing } from "@kcx/db";
 import { bazaarBuyInput } from "@kcx/shared";
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/session";
@@ -24,9 +24,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (!parsed.success) return NextResponse.json({ error: "Invalid quantity" }, { status: 400 });
 
   try {
-    const result = await buyBazaarNow(getDb(), {
+    const result = await takeBazaarListing(getDb(), {
       listingId: id,
-      buyerId: user.id,
+      takerId: user.id,
       quantity: parsed.data.quantity,
     });
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: 409 });

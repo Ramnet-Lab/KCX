@@ -11,6 +11,7 @@
     "typecheck": "pnpm -r typecheck",
     "ingest": "pnpm --filter @kcx/server ingest",
     "sync:items": "pnpm --filter @kcx/server sync:items",
+    "check:bazaar": "pnpm --filter @kcx/server check:bazaar",
     "seed:demo": "pnpm --filter @kcx/server exec tsx src/scripts/seed-demo-book.ts",
     "db:start": "node scripts/db.mjs start",
     "db:stop": "node scripts/db.mjs stop",

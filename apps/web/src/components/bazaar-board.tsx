@@ -36,6 +36,7 @@ export function BazaarBoard({
 }) {
   const [listings, setListings] = useState(initial);
   const [category, setCategory] = useState<BazaarCategory | "all">("all");
+  const [intent, setIntent] = useState<"all" | "sell" | "buy">("all");
   const [sort, setSort] = useState<Sort>("newest");
   const [search, setSearch] = useState("");
   const [mineOnly, setMineOnly] = useState(false);
@@ -50,11 +51,13 @@ export function BazaarBoard({
   useEffect(() => {
     const params = new URLSearchParams({ sort });
     if (category !== "all") params.set("category", category);
+    if (intent !== "all") params.set("intent", intent);
     if (search.trim()) params.set("q", search.trim());
     if (mineOnly) params.set("mine", "1");
     if (includeEnded) params.set("all", "1");
 
-    const isDefault = sort === "newest" && category === "all" && !search.trim() && !mineOnly && !includeEnded;
+    const isDefault =
+      sort === "newest" && category === "all" && intent === "all" && !search.trim() && !mineOnly && !includeEnded;
     if (isDefault) {
       setListings(initial);
       return;
@@ -79,7 +82,7 @@ export function BazaarBoard({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [category, sort, search, mineOnly, includeEnded, initial]);
+  }, [category, intent, sort, search, mineOnly, includeEnded, initial]);
 
   return (
     <div>
@@ -103,6 +106,16 @@ export function BazaarBoard({
               {BAZAAR_CATEGORY_LABELS[c]}
             </option>
           ))}
+        </select>
+        <select
+          value={intent}
+          onChange={(e) => setIntent(e.target.value as "all" | "sell" | "buy")}
+          aria-label="Filter by direction"
+          className="rounded border border-line bg-panel px-2 py-1.5 text-ink focus:outline-none"
+        >
+          <option value="all">Buying &amp; selling</option>
+          <option value="sell">For sale</option>
+          <option value="buy">Wanted</option>
         </select>
         <select
           value={sort}
@@ -217,6 +230,14 @@ function ListingCard({ listing: l }: { listing: BazaarListingDto }) {
             {l.status === "sold_out" ? "Sold" : l.status.replace(/_/g, " ")}
           </span>
         )}
+        {l.intent === "buy" && !ended && (
+          <span
+            className="absolute left-1 top-1 rounded bg-up/90 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-bg"
+            title="Somebody wants this and has the aUEC committed against their balance"
+          >
+            Wanted
+          </span>
+        )}
         {isAuction && !ended && (
           <span className="absolute left-1 top-1 rounded bg-accent/90 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-bg">
             {l.listingType === "auction_buy_now" && l.canBuyNow ? "Bid or buy" : "Auction"}
@@ -249,11 +270,13 @@ function ListingCard({ listing: l }: { listing: BazaarListingDto }) {
           ) : (
             <div className="flex items-baseline gap-2">
               <span className="num text-base font-bold text-up">{fmtAuec(l.buyNowPrice ?? 0)} aUEC</span>
-              {l.quantity > 1 && (
-                <span className="text-[10px] text-ink-faint">
-                  each · {l.remainingQuantity} of {l.quantity} left
-                </span>
-              )}
+              <span className="text-[10px] text-ink-faint">
+                {l.intent === "buy"
+                  ? `offered · wants ${l.remainingQuantity}`
+                  : l.quantity > 1
+                    ? `each · ${l.remainingQuantity} of ${l.quantity} left`
+                    : ""}
+              </span>
             </div>
           )}
           {isAuction && l.canBuyNow && l.buyNowPrice != null && (

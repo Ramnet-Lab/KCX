@@ -132,16 +132,36 @@ export const bazaarItems = pgTable(
   ],
 );
 
+/**
+ * Which way a listing points.
+ *
+ * `sell` is the classifieds default: I have this, here is my price. `buy` is a standing
+ * wanted ad — I want this, here is what I will pay — and it is the more interesting of the
+ * two, because the money behind it is committed against the poster's declared balance for
+ * as long as it stands. A wanted ad nobody has to back is a wish; this one is an offer.
+ */
+export const BAZAAR_INTENTS = ["sell", "buy"] as const;
+
 export const bazaarListings = pgTable(
   "bazaar_listings",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    intent: text("intent", { enum: BAZAAR_INTENTS }).notNull().default("sell"),
     /**
      * What this listing is, in catalogue terms. Nullable because listings predate the
      * catalogue and because a bundle genuinely isn't one item — but it is what price
      * history hangs off, so a listing without it gets none.
      */
     itemId: bigint("item_id", { mode: "number" }).references(() => bazaarItems.id),
+    /**
+     * Whoever POSTED the listing — the seller on a WTS, and the BUYER on a WTB.
+     *
+     * The column keeps its original name because renaming it would touch every query, index
+     * and DTO for a board that is still overwhelmingly sell-side. Read it as "poster", check
+     * `intent` before assuming which side of the trade they are on, and note that
+     * `bazaar_sales` records the real buyer and seller per sale — that, not this, is what
+     * settlement and collateral run on.
+     */
     sellerId: uuid("seller_id")
       .notNull()
       .references(() => users.id),
@@ -218,6 +238,12 @@ export const bazaarListings = pgTable(
       "bazaar_auction_single_lot",
       sql`${t.listingType} = 'buy_now' OR ${t.quantity} = 1`,
     ),
+    /**
+     * A wanted ad is a fixed offer. Letting sellers bid a wanted ad DOWN is a reverse
+     * auction, which is a different mechanism with a different fairness argument (see the
+     * sealed bidding on service contracts) — not something to get by accident from a flag.
+     */
+    check("bazaar_wtb_is_fixed", sql`${t.intent} = 'sell' OR ${t.listingType} = 'buy_now'`),
   ],
 );
 
@@ -246,6 +272,146 @@ export const bazaarListingImages = pgTable(
     index("bazaar_images_listing").on(t.listingId, t.sortIndex),
     /** The upload route serves by filename, so it has to resolve to exactly one listing. */
     uniqueIndex("bazaar_images_filename").on(t.filename),
+  ],
+);
+
+/**
+ * A ship's loadout, as data rather than as the words "fully kitted".
+ *
+ * Every component points at the same catalogue the listing itself does, so a buyer can see
+ * that the shields really are S4 and — later — search for ships carrying a part they want.
+ * The seller's prose stays in `description`; this is the part a machine can read.
+ *
+ * Nothing verifies it. Star Citizen exposes no inventory API, so this is the seller's claim
+ * in a structured form: easier to compare, easier to be caught misstating, and no more
+ * enforceable than the description was.
+ */
+export const bazaarListingComponents = pgTable(
+  "bazaar_listing_components",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    listingId: uuid("listing_id")
+      .notNull()
+      .references(() => bazaarListings.id),
+    itemId: bigint("item_id", { mode: "number" })
+      .notNull()
+      .references(() => bazaarItems.id),
+    /** Free text — "nose turret", "size 3 shield". The game's slot names aren't in the feed. */
+    slotLabel: text("slot_label"),
+    quantity: integer("quantity").notNull().default(1),
+    sortIndex: smallint("sort_index").notNull().default(0),
+  },
+  (t) => [
+    index("bazaar_components_listing").on(t.listingId, t.sortIndex),
+    /** "Which ships are listed with this part" — the search this table exists to enable. */
+    index("bazaar_components_item").on(t.itemId),
+    check("bazaar_components_quantity_positive", sql`${t.quantity} > 0`),
+  ],
+);
+
+export const BAZAAR_THREAD_STATUSES = ["open", "closed"] as const;
+
+/**
+ * One conversation between a listing's owner and one interested trader.
+ *
+ * This is the piece the bazaar was missing. Settlement assumed two people had already
+ * agreed — but there was nowhere in the product to do the agreeing, so it happened on
+ * Discord where nothing could be recorded, priced, or held against anyone. A price that
+ * emerges from a conversation nobody can see is a price we cannot stand behind.
+ *
+ * Private to the two parties and moderators. Deliberately not a public comment section:
+ * public Q&A is a moderation surface with its own staffing cost, and the blocking problem
+ * was that a buyer could not reach a seller at all.
+ */
+export const bazaarThreads = pgTable(
+  "bazaar_threads",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    listingId: uuid("listing_id")
+      .notNull()
+      .references(() => bazaarListings.id),
+    /** The listing's owner — seller on a WTS, buyer on a WTB. */
+    ownerId: uuid("owner_id")
+      .notNull()
+      .references(() => users.id),
+    /** The one who got in touch. */
+    counterpartyId: uuid("counterparty_id")
+      .notNull()
+      .references(() => users.id),
+    status: text("status", { enum: BAZAAR_THREAD_STATUSES }).notNull().default("open"),
+    /** Sort key for the desk, and half of the unread test. */
+    lastMessageAt: timestamp("last_message_at", { withTimezone: true }).notNull().defaultNow(),
+    ownerReadAt: timestamp("owner_read_at", { withTimezone: true }),
+    counterpartyReadAt: timestamp("counterparty_read_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    /** One thread per interested trader per listing — messages stack, threads don't. */
+    uniqueIndex("bazaar_threads_one_per_pair").on(t.listingId, t.counterpartyId),
+    index("bazaar_threads_owner").on(t.ownerId, t.lastMessageAt),
+    index("bazaar_threads_counterparty").on(t.counterpartyId, t.lastMessageAt),
+    check("bazaar_threads_distinct_parties", sql`${t.ownerId} <> ${t.counterpartyId}`),
+  ],
+);
+
+export const BAZAAR_MESSAGE_KINDS = ["message", "offer", "system"] as const;
+
+export const BAZAAR_OFFER_STATUSES = [
+  /** On the table. At most one per thread — a new offer supersedes the last. */
+  "open",
+  /** Taken by the other side; a sale exists as of that moment. */
+  "accepted",
+  "declined",
+  "withdrawn",
+  /** Replaced by a later offer from either side. */
+  "superseded",
+] as const;
+
+/**
+ * A message in a thread, which may carry a price.
+ *
+ * Offers live on messages rather than in their own table because an offer IS a thing
+ * someone said — splitting them apart produces two histories that have to be interleaved to
+ * be read, and the interleaving is the conversation.
+ *
+ * Either side may offer, and only the OTHER side may accept. That rules out the move where
+ * someone offers and immediately accepts their own number, which would turn a negotiation
+ * into a unilateral price change.
+ */
+export const bazaarMessages = pgTable(
+  "bazaar_messages",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    threadId: uuid("thread_id")
+      .notNull()
+      .references(() => bazaarThreads.id),
+    /** null = system (an offer superseded, a listing sold out from under the thread). */
+    senderId: uuid("sender_id").references(() => users.id),
+    kind: text("kind", { enum: BAZAAR_MESSAGE_KINDS }).notNull().default("message"),
+    body: text("body"),
+    /** Offer fields, all null on a plain message. Per unit, like every other bazaar price. */
+    offerUnitPrice: bigint("offer_unit_price", { mode: "number" }),
+    offerQuantity: integer("offer_quantity"),
+    offerStatus: text("offer_status", { enum: BAZAAR_OFFER_STATUSES }),
+    /** The sale struck when this offer was accepted. */
+    saleId: uuid("sale_id").references(() => bazaarSales.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("bazaar_messages_thread").on(t.threadId, t.createdAt),
+    /** Finding the live offer in a thread, which acceptance and supersession both need. */
+    index("bazaar_messages_open_offer").on(t.threadId).where(sql`${t.offerStatus} = 'open'`),
+    check(
+      "bazaar_messages_offer_shape",
+      sql`(${t.kind} = 'offer') = (${t.offerUnitPrice} IS NOT NULL AND ${t.offerStatus} IS NOT NULL)`,
+    ),
+    check("bazaar_messages_offer_positive", sql`${t.offerUnitPrice} IS NULL OR ${t.offerUnitPrice} > 0`),
+    check("bazaar_messages_offer_qty", sql`${t.offerQuantity} IS NULL OR ${t.offerQuantity} > 0`),
+    /** A message has to say something or offer something. */
+    check(
+      "bazaar_messages_not_empty",
+      sql`${t.body} IS NOT NULL OR ${t.offerUnitPrice} IS NOT NULL`,
+    ),
   ],
 );
 
