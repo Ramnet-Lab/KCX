@@ -135,6 +135,64 @@ export function ContractStandingBadge({
   );
 }
 
+/**
+ * Bazaar standing: settled sales and stars.
+ *
+ * No breach column, because there is nothing confidential to breach — a bazaar listing is
+ * public by construction. What a buyer needs to know is whether this seller turns up.
+ */
+export function BazaarStandingBadge({
+  completed,
+  undertaken,
+  completionPct,
+  stars,
+  ratingCount,
+  compact = false,
+}: {
+  completed: number;
+  undertaken: number;
+  completionPct: number | null;
+  stars: number | null;
+  ratingCount: number;
+  compact?: boolean;
+}) {
+  if (undertaken === 0 && ratingCount === 0) {
+    return (
+      <span className={`${compact ? "text-[10px]" : "text-xs"} text-ink-faint`} title="No completed sales yet">
+        new seller
+      </span>
+    );
+  }
+
+  const pctColor =
+    completionPct == null
+      ? "text-ink-faint"
+      : completionPct >= 90
+        ? "text-up"
+        : completionPct >= 70
+          ? "text-ink-dim"
+          : "text-down";
+
+  return (
+    <span className={`flex items-center gap-1.5 ${compact ? "text-[10px]" : "text-xs"}`}>
+      {undertaken > 0 && (
+        <span className={`num ${pctColor}`} title={`${completed} of ${undertaken} sales settled`}>
+          {completed}/{undertaken} settled
+        </span>
+      )}
+      {stars != null && (
+        <span
+          className="text-accent"
+          title={`${stars.toFixed(2)} from ${ratingCount} rating${ratingCount === 1 ? "" : "s"}`}
+        >
+          ★{stars.toFixed(1)}
+          <span className="text-ink-faint"> ({ratingCount})</span>
+        </span>
+      )}
+    </span>
+  );
+}
+
 /** Read-only star row, used inside the rating form. */
 export function StarPicker({
   value,

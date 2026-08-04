@@ -2,6 +2,7 @@ import {
   commodities,
   commodityMarksLatest,
   commodityTape,
+  BULK_SCU_THRESHOLD,
   getDb,
   locations,
   MARK_CONFIDENT_PAIRS,
@@ -242,25 +243,68 @@ export default async function CommodityPage({ params }: Props) {
       <div className="mb-4 grid gap-2 text-xs sm:grid-cols-2">
         {(
           [
-            { label: "Best NPC payout", price: mark?.bestSell, terminal: mark?.bestSellTerminal, system: mark?.bestSellSystem, tone: "text-up" },
-            { label: "Cheapest NPC purchase", price: mark?.bestBuy, terminal: mark?.bestBuyTerminal, system: mark?.bestBuySystem, tone: "text-ink" },
+            {
+              label: "Best NPC payout",
+              price: mark?.bestSell,
+              terminal: mark?.bestSellTerminal,
+              system: mark?.bestSellSystem,
+              bulk: mark?.bulkSell,
+              bulkTerminal: mark?.bulkSellTerminal,
+              bulkSystem: mark?.bulkSellSystem,
+              tone: "text-up",
+            },
+            {
+              label: "Cheapest NPC purchase",
+              price: mark?.bestBuy,
+              terminal: mark?.bestBuyTerminal,
+              system: mark?.bestBuySystem,
+              bulk: mark?.bulkBuy,
+              bulkTerminal: mark?.bulkBuyTerminal,
+              bulkSystem: mark?.bulkBuySystem,
+              tone: "text-ink",
+            },
           ] as const
-        ).map((row) => (
-          <div key={row.label} className="rounded border border-line bg-panel px-3 py-2">
-            <div className="text-ink-faint">{row.label}</div>
-            <div className={`num ${row.tone}`}>{fmtAuec(row.price ?? null)}</div>
-            <div className="text-ink-faint">
-              {row.terminal ? (
-                <>
-                  {row.terminal}
-                  {row.system ? <span className="text-ink-faint/70"> · {row.system}</span> : null}
-                </>
-              ) : (
-                "no terminal trades this side"
-              )}
+        ).map((row) => {
+          const differs = row.bulk != null && row.price != null && Number(row.bulk) !== Number(row.price);
+          return (
+            <div key={row.label} className="rounded border border-line bg-panel px-3 py-2">
+              <div className="text-ink-faint">{row.label}</div>
+              <div className={`num ${row.tone}`}>{fmtAuec(row.price ?? null)}</div>
+              <div className="text-ink-faint">
+                {row.terminal ? (
+                  <>
+                    {row.terminal}
+                    {row.system ? <span className="text-ink-faint/70"> · {row.system}</span> : null}
+                  </>
+                ) : (
+                  "no terminal trades this side"
+                )}
+              </div>
+              {/*
+                The headline figure is the best price at ANY terminal, and that terminal may
+                hold three SCU. Anyone actually hauling needs the best price somewhere that can
+                fill a hold, which is frequently a different place and a worse number.
+              */}
+              <div className="mt-1 border-t border-line/60 pt-1">
+                {row.bulk != null ? (
+                  <>
+                    <span className="num text-ink-dim">{fmtAuec(String(row.bulk))}</span>
+                    <span className="ml-1 text-ink-faint">
+                      at {BULK_SCU_THRESHOLD}+ SCU
+                      {row.bulkTerminal ? ` · ${row.bulkTerminal}` : ""}
+                      {row.bulkSystem ? ` · ${row.bulkSystem}` : ""}
+                    </span>
+                    {differs && <span className="ml-1 text-accent" title="Bulk quantity trades at a different terminal and a different price">≠</span>}
+                  </>
+                ) : (
+                  <span className="text-ink-faint">
+                    no terminal handles {BULK_SCU_THRESHOLD}+ SCU on this side
+                  </span>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       {npcSplit && (
         <p className="mb-4 text-xs text-ink-faint">

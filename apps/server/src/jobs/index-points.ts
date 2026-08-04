@@ -81,6 +81,11 @@ export async function rebuildIndexSince(since: Date): Promise<void> {
       FROM moves GROUP BY captured_at
     ),
     sectors AS (SELECT DISTINCT sector FROM returns),
+    -- The stored series runs CONTINUOUSLY across patches and is never rebased. Rebasing it at
+    -- each season would discard the long-run history, and whether commodities inflate patch
+    -- over patch is exactly the question no other Star Citizen tool can answer. The
+    -- season-to-date figure a trader actually acts on is derived at read time by dividing by
+    -- the season's opening value — see indexLatest() in queries/index-series.ts.
     seeds AS (
       SELECT
         s.sector,

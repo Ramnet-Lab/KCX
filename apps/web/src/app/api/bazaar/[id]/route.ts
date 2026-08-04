@@ -209,8 +209,6 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
             }
             patch.quantity = edit.quantity;
             patch.remainingQuantity = edit.quantity - spokenFor;
-            // Restocking a sold-out listing puts it back on the board.
-            if (l.status === "active" && patch.remainingQuantity > 0) patch.status = "active";
           }
 
           await tx.update(bazaarListings).set(patch).where(eq(bazaarListings.id, l.id));

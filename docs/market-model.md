@@ -36,7 +36,9 @@ Player price discovery is the product. It now sets the number.
 
 Only a **settled, dual-confirmed contract** writes a print, and only a print that survives
 every check below feeds the mark. Posting an order moves nothing. An order that expires
-unfilled moves nothing.
+unfilled moves nothing. A **bazaar sale moves nothing** — ships and crafted goods have no
+SCU price and no NPC reference, so there is no unit in which they could contribute to a
+commodity's price; see [bazaar.md](bazaar.md).
 
 Balances and cargo on KCX are **self-declared** — the platform never holds aUEC or cargo, and
 Star Citizen has no API to verify either. So the "can they afford it" check at settlement is
@@ -98,15 +100,39 @@ index at that timestamp.
 
 - **The tape** on every commodity page lists recent settled trades, including the withheld
   ones and why. `GET /api/prints?commodityId=<id>`.
-- **The chart** draws the mark as candles, with the NPC sell-to and buy-from as reference
-  lines. `GET /api/candles?commodityId=<id>&period=1h`.
+- **The chart** draws the mark as a line, with the NPC sell-to and buy-from as reference lines.
+  `GET /api/candles?commodityId=<id>&period=1h`. (Candlesticks were dropped: the mark only
+  changes on a poll or a settlement, so most buckets had a flat OHLC and the bodies implied
+  intra-hour trading that had not happened.)
 - **Change %** is measured over 24h where 24h of history exists, and *since tracking began*
   otherwise — marked with `*`, because the market wall sorts by this number and quietly
   calling a shorter window "24h" would be wrong in a way nobody could see.
 
+## Two NPC figures, not one
+
+`best_sell` is a universe-wide max and `best_buy` a universe-wide min, so they are usually at
+different terminals and — for **53 of the 77** two-sided commodities — in different star
+systems. Both are therefore labelled with the terminal and system offering them. They are two
+prices in two places, not a spread anyone can capture standing still.
+
+Each also carries a **bulk** figure: the best price at a terminal actually holding (or wanting)
+`BULK_SCU_THRESHOLD` SCU or more. The headline figure can come from a terminal with three SCU
+in stock, which is not a price anyone hauling cargo can transact at.
+
+## Season boundaries
+
+Every patch destroys commodity cargo, so a rollover expires all open orders, releases escrow
+reservations, and voids open/bidding/awarded contracts. Settled trades, prints, ratings and
+reputation survive — they are history, and history is not revised by a patch. Rollover requires
+the new version on **two consecutive** hourly polls, because UEX's LIVE field can flicker during
+a patch window and the rollover is destructive with no undo.
+
+The **sector index never rebases**: the stored series chains straight across patches, and
+season-to-date is derived from it at read time. See [decisions.md](./decisions.md) D5.
+
 ## Constants
 
-Defined in `packages/db/src/queries/mark.ts` and `packages/db/src/queries/print-integrity.ts`.
+Defined in `packages/db/src/queries/mark.ts`, `print-integrity.ts` and `market-point.ts`.
 
 | Constant | Value |
 |---|---|
@@ -117,6 +143,7 @@ Defined in `packages/db/src/queries/mark.ts` and `packages/db/src/queries/print-
 | `PAIR_PRINT_LIMIT` / `PAIR_WINDOW_DAYS` | 3 / 7 |
 | `MAX_ACCOUNT_VOLUME_SHARE` | 0.7 |
 | `SHARE_CAP_MIN_PAIRS` | 3 |
+| `BULK_SCU_THRESHOLD` | 100 |
 
 ## Known limits
 

@@ -36,10 +36,25 @@ export const orderCreateInput = z.object({
 });
 export type OrderCreateInput = z.infer<typeof orderCreateInput>;
 
+/**
+ * Revising a resting order. The commodity and the side are fixed once posted — changing
+ * either would make it a different order wearing the same id, and anyone who had been
+ * watching it would never know.
+ */
+export const orderEditInput = z.object({
+  pricePerScu: z.number().int().positive().max(1_000_000_000).optional(),
+  quantityScu: z.number().int().positive().max(1_000_000).optional(),
+  minFillScu: z.number().int().positive().max(1_000_000).optional(),
+  notes: z.string().max(ORDER_NOTES_MAX).nullable().optional(),
+});
+export type OrderEditInput = z.infer<typeof orderEditInput>;
+
 export const orderActionInput = z.object({
-  action: z.enum(["pause", "resume", "cancel", "bump", "refresh", "fill"]),
+  action: z.enum(["pause", "resume", "cancel", "bump", "refresh", "fill", "edit"]),
   /** For `fill`: SCU actually traded; defaults to the full remaining quantity. */
   quantityScu: z.number().int().positive().max(1_000_000).optional(),
+  /** For `edit`. */
+  edit: orderEditInput.optional(),
 });
 export type OrderAction = z.infer<typeof orderActionInput>["action"];
 

@@ -31,6 +31,21 @@ export function ModNavLink() {
   );
 }
 
+/**
+ * Link to the trader's own desk. Hidden while signed out, where it would only lead to a
+ * redirect — same session-driven approach as ModNavLink, and /manage checks the session
+ * server-side regardless.
+ */
+export function DeskNavLink() {
+  const { user, loaded } = useSession();
+  if (!loaded || !user) return null;
+  return (
+    <Link href="/manage" className="hover:text-ink" title="Your listings, contracts and orders">
+      My desk
+    </Link>
+  );
+}
+
 let cached: Promise<{ user: SessionUser | null; devLoginEnabled: boolean }> | null = null;
 function fetchSession() {
   cached ??= fetch("/api/auth/session")

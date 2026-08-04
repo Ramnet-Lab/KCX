@@ -33,6 +33,12 @@ const MARKS_SELECT = sql`
   m.best_sell_system,
   m.best_buy_terminal,
   m.best_buy_system,
+  m.bulk_buy,
+  m.bulk_buy_terminal,
+  m.bulk_buy_system,
+  m.bulk_sell,
+  m.bulk_sell_terminal,
+  m.bulk_sell_system,
   m.sell_terminals,
   m.buy_terminals,
   m.player_mark,
@@ -46,9 +52,20 @@ const MARKS_SELECT = sql`
 const MARKS_COLUMNS = sql.raw(`
   (commodity_id, best_sell, best_buy,
    best_sell_terminal, best_sell_system, best_buy_terminal, best_buy_system,
+   bulk_buy, bulk_buy_terminal, bulk_buy_system,
+   bulk_sell, bulk_sell_terminal, bulk_sell_system,
    sell_terminals, buy_terminals,
    mark_price, last_price, last_traded_at, window_volume_scu, window_print_count, window_pairs, updated_at)
 `);
+
+/**
+ * Quantity at which a terminal counts as able to serve a hauler rather than a courier.
+ *
+ * 100 SCU is deliberately modest — a Freelancer MAX carries 120 — because the point is to
+ * exclude the 3-SCU outposts that win the "cheapest anywhere" comparison and can fill nobody's
+ * hold, not to price a Hull-C specifically.
+ */
+export const BULK_SCU_THRESHOLD = 100;
 
 /*
  * A note on the system lookup used below: star systems are the only roots in `locations`
@@ -88,7 +105,18 @@ export async function captureAllMarks(tx: Exec, capturedAt: Date): Promise<void>
         (array_agg(terminal_id ORDER BY nullif(price_sell, 0) DESC)
            FILTER (WHERE nullif(price_sell, 0) IS NOT NULL))[1] AS best_sell_terminal_id,
         (array_agg(terminal_id ORDER BY nullif(price_buy, 0) ASC)
-           FILTER (WHERE nullif(price_buy, 0) IS NOT NULL))[1]  AS best_buy_terminal_id
+           FILTER (WHERE nullif(price_buy, 0) IS NOT NULL))[1]  AS best_buy_terminal_id,
+        -- The same two prices restricted to terminals holding (or wanting) a haulable
+        -- quantity. scu_buy is what a terminal has in stock to sell you; scu_sell is how much
+        -- it will still take off you. Both are ingested and were being thrown away.
+        min(nullif(price_buy, 0)) FILTER (WHERE coalesce(scu_buy, 0) >= ${BULK_SCU_THRESHOLD})  AS bulk_buy,
+        (array_agg(terminal_id ORDER BY nullif(price_buy, 0) ASC)
+           FILTER (WHERE nullif(price_buy, 0) IS NOT NULL
+                     AND coalesce(scu_buy, 0) >= ${BULK_SCU_THRESHOLD}))[1]                     AS bulk_buy_terminal_id,
+        max(nullif(price_sell, 0)) FILTER (WHERE coalesce(scu_sell, 0) >= ${BULK_SCU_THRESHOLD}) AS bulk_sell,
+        (array_agg(terminal_id ORDER BY nullif(price_sell, 0) DESC)
+           FILTER (WHERE nullif(price_sell, 0) IS NOT NULL
+                     AND coalesce(scu_sell, 0) >= ${BULK_SCU_THRESHOLD}))[1]                    AS bulk_sell_terminal_id
       FROM terminal_prices_latest
       GROUP BY commodity_id
     ),
@@ -102,6 +130,12 @@ export async function captureAllMarks(tx: Exec, capturedAt: Date): Promise<void>
         ts.system_name AS best_sell_system,
         tb.name        AS best_buy_terminal,
         tb.system_name AS best_buy_system,
+        b.bulk_buy,
+        kb.name        AS bulk_buy_terminal,
+        kb.system_name AS bulk_buy_system,
+        b.bulk_sell,
+        ks.name        AS bulk_sell_terminal,
+        ks.system_name AS bulk_sell_system,
         coalesce(b.sell_terminals, 0) AS sell_terminals,
         coalesce(b.buy_terminals, 0)  AS buy_terminals,
         ${playerMarkExpr("s")} AS player_mark,
@@ -114,6 +148,8 @@ export async function captureAllMarks(tx: Exec, capturedAt: Date): Promise<void>
       LEFT JOIN baseline b ON b.commodity_id = c.id
       LEFT JOIN term ts ON ts.id = b.best_sell_terminal_id
       LEFT JOIN term tb ON tb.id = b.best_buy_terminal_id
+      LEFT JOIN term kb ON kb.id = b.bulk_buy_terminal_id
+      LEFT JOIN term ks ON ks.id = b.bulk_sell_terminal_id
       LEFT JOIN s ON s.commodity_id = c.id
       WHERE c.is_tradable
     ),
@@ -136,6 +172,12 @@ export async function captureAllMarks(tx: Exec, capturedAt: Date): Promise<void>
       best_sell_system   = excluded.best_sell_system,
       best_buy_terminal  = excluded.best_buy_terminal,
       best_buy_system    = excluded.best_buy_system,
+      bulk_buy           = excluded.bulk_buy,
+      bulk_buy_terminal  = excluded.bulk_buy_terminal,
+      bulk_buy_system    = excluded.bulk_buy_system,
+      bulk_sell          = excluded.bulk_sell,
+      bulk_sell_terminal = excluded.bulk_sell_terminal,
+      bulk_sell_system   = excluded.bulk_sell_system,
       sell_terminals     = excluded.sell_terminals,
       buy_terminals      = excluded.buy_terminals,
       mark_price         = excluded.mark_price,
@@ -173,6 +215,12 @@ export async function refreshCommodityMark(tx: Exec, commodityId: number, at: Da
         l.best_sell_system,
         l.best_buy_terminal,
         l.best_buy_system,
+        l.bulk_buy,
+        l.bulk_buy_terminal,
+        l.bulk_buy_system,
+        l.bulk_sell,
+        l.bulk_sell_terminal,
+        l.bulk_sell_system,
         coalesce(l.sell_terminals, 0) AS sell_terminals,
         coalesce(l.buy_terminals, 0)  AS buy_terminals,
         ${playerMarkExpr("s")} AS player_mark,

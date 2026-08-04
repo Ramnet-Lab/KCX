@@ -4,6 +4,11 @@ Player-driven commodities exchange for Star Citizen: a market-data terminal (per
 prices, charts) fused with a player order board (buy/sell listings settled in-game, dual
 confirmation, reputation). Free, non-commercial fan project.
 
+Alongside the commodity market there is a **bazaar** for everything that isn't bulk cargo —
+ships, components, crafted goods — sold at a fixed price or by open ascending auction, and
+settled the same bilateral way. It never feeds the commodity price; see
+[docs/bazaar.md](docs/bazaar.md).
+
 This is an unofficial Star Citizen fan site, not affiliated with the Cloud Imperium group of
 companies. All content on this site not authored by its host or users are property of their
 respective owners.

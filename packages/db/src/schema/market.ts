@@ -167,6 +167,21 @@ export const commodityMarksLatest = pgTable("commodity_marks_latest", {
   bestSellSystem: text("best_sell_system"),
   bestBuyTerminal: text("best_buy_terminal"),
   bestBuySystem: text("best_buy_system"),
+  /**
+   * The same two prices, restricted to terminals that actually hold (or want) a useful
+   * quantity — see BULK_SCU_THRESHOLD.
+   *
+   * `best_buy` is the cheapest terminal selling this commodity *anywhere*, and that terminal
+   * may hold 3 SCU. Quoting it as the price to beat is quoting a number nobody hauling cargo
+   * can transact at: a Hull-C leaves with 4,608 SCU. We already ingest scu_buy and
+   * scu_sell_stock and were discarding both.
+   */
+  bulkBuy: numeric("bulk_buy", { precision: 12, scale: 2 }),
+  bulkBuyTerminal: text("bulk_buy_terminal"),
+  bulkBuySystem: text("bulk_buy_system"),
+  bulkSell: numeric("bulk_sell", { precision: 12, scale: 2 }),
+  bulkSellTerminal: text("bulk_sell_terminal"),
+  bulkSellSystem: text("bulk_sell_system"),
   sellTerminals: integer("sell_terminals").notNull().default(0),
   buyTerminals: integer("buy_terminals").notNull().default(0),
   /**

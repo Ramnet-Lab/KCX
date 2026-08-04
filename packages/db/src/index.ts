@@ -6,6 +6,7 @@ export * from "./queries/market-point";
 export * from "./queries/moderation";
 export * from "./queries/print-integrity";
 export * from "./queries/prints";
+export * from "./queries/season";
 export * from "./queries/bans";
 export * from "./queries/bazaar";
 export * from "./queries/collateral";

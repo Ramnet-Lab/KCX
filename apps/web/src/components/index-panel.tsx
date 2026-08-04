@@ -52,6 +52,8 @@ export function IndexPanel({ series, latest, latestAt, entries, onPlaceOrder }: 
   const current = latestBySector.get(sector)?.value ?? points[points.length - 1]?.value ?? null;
   const first = points[0]?.value ?? null;
   const changePct = current != null && first != null && first > 0 ? ((current - first) / first) * 100 : null;
+  const seasonChange = latestBySector.get(sector)?.seasonChangePct ?? null;
+  const seasonVersion = latestBySector.get(sector)?.seasonVersion ?? null;
 
   return (
     <div className="mb-6 rounded border border-line bg-panel">
@@ -74,6 +76,19 @@ export function IndexPanel({ series, latest, latestAt, entries, onPlaceOrder }: 
             {changePct != null && (
               <span className={`num ml-2 text-xs ${changePct >= 0 ? "text-up" : "text-down"}`}>
                 {changePct >= 0 ? "▲" : "▼"} {Math.abs(changePct).toFixed(2)}%
+              </span>
+            )}
+            {/*
+              Season-to-date beside all-time. The stored series never rebases at a patch, so
+              this is a view of the same numbers rather than a competing series — but "since
+              the patch" is the horizon a trader actually trades on.
+            */}
+            {seasonChange != null && (
+              <span className="ml-2 block text-[10px] text-ink-faint">
+                <span className={seasonChange >= 0 ? "text-up" : "text-down"}>
+                  {seasonChange >= 0 ? "▲" : "▼"} {Math.abs(seasonChange).toFixed(2)}%
+                </span>{" "}
+                since {seasonVersion ? `patch ${seasonVersion}` : "season open"}
               </span>
             )}
           </span>

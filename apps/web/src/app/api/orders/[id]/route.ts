@@ -1,4 +1,4 @@
-import { getDb, notifyMarketChange, orderEvents, orders } from "@kcx/db";
+import { buyCapacity, getDb, notifyMarketChange, orderEvents, orders, sellCapacity } from "@kcx/db";
 import { ORDER_TTL_DAYS, orderActionInput } from "@kcx/shared";
 import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
@@ -15,6 +15,7 @@ const EVENT_FOR_ACTION = {
   cancel: "cancelled",
   bump: "bumped",
   refresh: "refreshed",
+  edit: "edited",
 } as const satisfies Record<Exclude<import("@kcx/shared").OrderAction, "fill">, string>;
 
 /** PATCH /api/orders/:id — owner lifecycle actions (pause/resume/cancel/bump/refresh). */
@@ -63,6 +64,74 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const now = new Date();
   const patch: Partial<typeof orders.$inferInsert> = { updatedAt: now };
 
+  /**
+   * Revising a resting order re-runs the same collateral gate as posting one — otherwise
+   * "edit the price up" would be a way to promise aUEC that placing the order would have
+   * refused. The order's OWN current commitment is added back before comparing, because
+   * capacity already counts it and we are replacing it, not stacking on top of it.
+   */
+  if (action === "edit") {
+    const edit = parsed.data.edit;
+    if (!edit) return NextResponse.json({ error: "Nothing to change" }, { status: 400 });
+    if (order.status !== "active" && order.status !== "paused") {
+      return NextResponse.json({ error: `Order is ${order.status.replace(/_/g, " ")}` }, { status: 409 });
+    }
+
+    const price = edit.pricePerScu ?? order.pricePerScu;
+    const quantity = edit.quantityScu ?? order.quantityScu;
+    const remaining = quantity - order.filledScu;
+    if (remaining < order.reservedScu) {
+      return NextResponse.json(
+        {
+          error:
+            order.reservedScu > 0
+              ? `${order.reservedScu} SCU is locked in an open contract — you can't cut the order below that.`
+              : "That quantity is below what has already been filled.",
+        },
+        { status: 409 },
+      );
+    }
+    if (remaining <= 0) {
+      return NextResponse.json({ error: "Nothing would be left on the board — cancel it instead." }, { status: 409 });
+    }
+    const minFill = edit.minFillScu ?? order.minFillScu;
+    if (minFill > quantity) {
+      return NextResponse.json({ error: "Minimum fill cannot exceed the order quantity" }, { status: 400 });
+    }
+
+    const unreserved = remaining - order.reservedScu;
+    if (order.side === "buy") {
+      const capacity = await buyCapacity(db, user.id);
+      const freedByThisOrder = (order.remainingScu - order.reservedScu) * order.pricePerScu;
+      const wanted = unreserved * price;
+      if (wanted > capacity.available + freedByThisOrder) {
+        return NextResponse.json(
+          {
+            error: `That revision commits ${wanted.toLocaleString()} aUEC but only ${(capacity.available + freedByThisOrder).toLocaleString()} is free once your other orders, contracts and bids are counted.`,
+          },
+          { status: 409 },
+        );
+      }
+    } else {
+      const capacity = await sellCapacity(db, user.id, order.commodityId);
+      const freedByThisOrder = order.remainingScu - order.reservedScu;
+      if (unreserved > capacity.available + freedByThisOrder) {
+        return NextResponse.json(
+          {
+            error: `You'd be offering ${unreserved.toLocaleString()} SCU with only ${(capacity.available + freedByThisOrder).toLocaleString()} uncommitted in your declared holdings.`,
+          },
+          { status: 409 },
+        );
+      }
+    }
+
+    patch.pricePerScu = price;
+    patch.quantityScu = quantity;
+    patch.remainingScu = remaining;
+    patch.minFillScu = minFill;
+    if (edit.notes !== undefined) patch.notes = edit.notes?.trim() || null;
+  }
+
   switch (action) {
     case "pause":
       patch.status = "paused";
@@ -86,6 +155,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       patch.bumpedAt = now;
       patch.expiresAt = new Date(now.getTime() + ORDER_TTL_DAYS * 86_400_000);
       break;
+    case "edit":
+      // The patch was built and gated above; nothing further to set here.
+      break;
   }
 
   try {
@@ -95,7 +167,15 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
         orderId: id,
         actorId: user.id,
         type: EVENT_FOR_ACTION[action],
-        data: {},
+        // What changed is part of the audit trail; an "edited" row with no detail says
+        // nothing about which terms someone revised.
+        data:
+          action === "edit"
+            ? {
+                from: { pricePerScu: order.pricePerScu, quantityScu: order.quantityScu },
+                to: { pricePerScu: patch.pricePerScu, quantityScu: patch.quantityScu },
+              }
+            : {},
       });
     });
     await notifyMarketChange(db, {

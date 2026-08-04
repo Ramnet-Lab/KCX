@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ModNavLink, SessionBar } from "@/components/session-bar";
+import { DeskNavLink, ModNavLink, SessionBar } from "@/components/session-bar";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -35,6 +35,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/contracts" className="hover:text-ink">
                 Contracts
               </Link>
+              <Link href="/bazaar" className="hover:text-ink">
+                Bazaar
+              </Link>
+              <DeskNavLink />
               <ModNavLink />
               <SessionBar />
             </nav>
@@ -63,6 +67,20 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               (community-crowdsourced; may not reflect live servers). KCX never holds aUEC or
               cargo — all player trades settle in-game, bilaterally, at your own risk. In-game
               currency only; real-money trading is banned.
+            </p>
+            <p className="flex flex-wrap gap-x-4 gap-y-1 pt-1">
+              <Link href="/about" className="hover:text-ink">
+                About
+              </Link>
+              <Link href="/terms" className="hover:text-ink">
+                Terms of use
+              </Link>
+              <Link href="/privacy" className="hover:text-ink">
+                Privacy
+              </Link>
+              <Link href="/credits" className="hover:text-ink">
+                Credits
+              </Link>
             </p>
           </div>
         </footer>

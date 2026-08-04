@@ -30,4 +30,20 @@ export function kindToSector(kind: string | null | undefined): SectorCode {
 
 export type IndexPoint = { time: number; value: number };
 export type IndexSeries = Partial<Record<SectorCode, IndexPoint[]>>;
-export type IndexLatest = { sector: SectorCode; value: number; constituents: number };
+export type IndexLatest = {
+  sector: SectorCode;
+  value: number;
+  constituents: number;
+  /**
+   * Season-to-date, derived from the same continuous series rather than kept as a second one.
+   *
+   * The stored index never rebases at a patch boundary: doing so would throw away the long-run
+   * history, and whether commodities inflate patch over patch is the question no other Star
+   * Citizen tool is positioned to answer. But a trader acts on "how has this moved since the
+   * patch", so both are offered — and because the season figure is a view of the continuous
+   * series, the two can never disagree about what happened.
+   */
+  seasonOpen: number | null;
+  seasonVersion: string | null;
+  seasonChangePct: number | null;
+};

@@ -8,8 +8,11 @@ loadRootEnv();
 import {
   closeDb,
   expireStaleContracts,
+  closeBazaarAuctions,
   closeContractBidding,
   ensureBootstrapAdmin,
+  expireBazaarListings,
+  expireBazaarSales,
   liftExpiredBans,
   expireContractAwards,
   expireServiceContracts,
@@ -165,6 +168,15 @@ async function main() {
     if (jobs > 0) console.log(`[contracts] ${jobs} service contract(s) passed their deadline`);
     const n = await expireUnfilledOrders(db);
     if (n > 0) console.log(`[orders] ${n} order(s) hit their fill-by deadline → expired_unfilled`);
+    // Bazaar, in the order the state depends on: award the auctions whose clock ran out,
+    // put the units from sales nobody confirmed back on the board, and only then expire
+    // listings — so a restocked listing isn't expired in the same pass that revived it.
+    const won = await closeBazaarAuctions(db);
+    if (won > 0) console.log(`[bazaar] ${won} auction(s) closed → sold to the high bidder`);
+    const lapsedSales = await expireBazaarSales(db);
+    if (lapsedSales > 0) console.log(`[bazaar] ${lapsedSales} sale(s) went unconfirmed → units back on the board`);
+    const deadListings = await expireBazaarListings(db);
+    if (deadListings > 0) console.log(`[bazaar] ${deadListings} listing(s) ran out of time`);
     // Cosmetic: isBanned() already treats an elapsed ban as lifted, but leaving served bans
     // in the data makes the mod console lie about who is currently banned.
     const unbanned = await liftExpiredBans(db);

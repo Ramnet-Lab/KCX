@@ -2,11 +2,23 @@
 import { loadRootEnv } from "../env";
 loadRootEnv();
 
-import { closeDb, expireStaleContracts, expireUnfilledOrders, getDb, reconcileReservations } from "@kcx/db";
+import {
+  closeBazaarAuctions,
+  closeDb,
+  expireBazaarListings,
+  expireBazaarSales,
+  expireStaleContracts,
+  expireUnfilledOrders,
+  getDb,
+  reconcileReservations,
+} from "@kcx/db";
 
 const db = getDb();
 console.log(`escrows expired:      ${await expireStaleContracts(db)}`);
 console.log(`reservations healed:  ${await reconcileReservations(db)}`);
 console.log(`orders expired:       ${await expireUnfilledOrders(db)}`);
+console.log(`auctions closed:      ${await closeBazaarAuctions(db)}`);
+console.log(`bazaar sales lapsed:  ${await expireBazaarSales(db)}`);
+console.log(`listings expired:     ${await expireBazaarListings(db)}`);
 await closeDb();
 process.exit(0);

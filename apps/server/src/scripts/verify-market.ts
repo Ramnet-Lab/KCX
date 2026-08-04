@@ -11,7 +11,7 @@
 import { loadRootEnv } from "../env";
 loadRootEnv();
 
-import { captureAllMarks, closeDb, getDb, judgePrint, refreshCommodityMark, tickerEntries } from "@kcx/db";
+import { captureAllMarks, closeDb, getDb, judgePrint, refreshCommodityMark, rolloverSeason, tickerEntries } from "@kcx/db";
 import { sql } from "drizzle-orm";
 import { rebuildCandlesSince } from "../jobs/candles";
 import { rebuildIndexSince } from "../jobs/index-points";
@@ -118,6 +118,75 @@ async function main() {
   check("the ticker excludes commodities with no price at all", shown === shouldShow, `${shown} shown, ${priceless} withheld`);
   const blank = (await tickerEntries(db)).filter((e) => e.price == null && e.bestBuy == null).length;
   check("no ticker entry is entirely priceless", blank === 0);
+
+  // Bulk figures: the headline NPC price can come from a terminal holding 3 SCU. Where a
+  // bulk price exists it must be no better than the headline — a terminal that stocks MORE
+  // cannot also be cheaper than the cheapest, and if it looks that way the filter is wrong.
+  const bulkImpossible = Number(
+    await scalar(sql`
+      SELECT count(*)::text FROM commodity_marks_latest
+      WHERE (bulk_buy  IS NOT NULL AND best_buy  IS NOT NULL AND bulk_buy  < best_buy)
+         OR (bulk_sell IS NOT NULL AND best_sell IS NOT NULL AND bulk_sell > best_sell)
+    `),
+  );
+  const bulkDiffers = Number(
+    await scalar(sql`
+      SELECT count(*)::text FROM commodity_marks_latest
+      WHERE bulk_buy IS NOT NULL AND best_buy IS NOT NULL AND bulk_buy <> best_buy
+    `),
+  );
+  check("bulk prices are never better than the unrestricted best", bulkImpossible === 0);
+  check(
+    "bulk pricing finds real differences",
+    bulkDiffers > 0,
+    `${bulkDiffers} commodities where the cheapest terminal can't serve bulk`,
+  );
+
+  console.log("\n=== season rollover (rolled back) ===");
+  {
+    const ROLLBACK2 = new Error("__rollback2__");
+    await db
+      .transaction(async (tx) => {
+        const before = await tx.execute<{ orders: string; escrows: string }>(sql`
+          SELECT (SELECT count(*) FROM orders WHERE status IN ('active','paused'))::text AS orders,
+                 (SELECT count(*) FROM trades WHERE status = 'escrow')::text AS escrows
+        `);
+        const season = await tx.execute<{ id: number }>(sql`SELECT id FROM game_versions ORDER BY id DESC LIMIT 1`);
+        const seasonId = season.rows[0]?.id;
+        if (seasonId == null) {
+          console.log("  skipped — no game_versions row");
+          throw ROLLBACK2;
+        }
+        const settledBefore = await scalarIn(tx, sql`SELECT count(*)::text FROM trades WHERE status = 'settled'`);
+        const printsBefore = await scalarIn(tx, sql`SELECT count(*)::text FROM trade_prints`);
+
+        const r = await rolloverSeason(tx as unknown as typeof db, { newSeasonId: seasonId });
+        check(
+          "rollover expired the open board",
+          r.ordersExpired === Number(before.rows[0]?.orders ?? 0),
+          `${r.ordersExpired} order(s), ${r.tradesExpired} escrow(s), ${r.contractsExpired} contract(s)`,
+        );
+        const leftOpen = await scalarIn(
+          tx,
+          sql`SELECT count(*)::text FROM orders WHERE status IN ('active','paused')`,
+        );
+        check("no order is left tradable after a wipe", Number(leftOpen) === 0);
+        const stranded = await scalarIn(tx, sql`SELECT count(*)::text FROM orders WHERE reserved_scu > 0`);
+        check("no reservation is stranded", Number(stranded) === 0, `${r.reservationsReleased} released`);
+
+        // History must be untouched: a patch destroys cargo, not the record of past trades.
+        const settledAfter = await scalarIn(tx, sql`SELECT count(*)::text FROM trades WHERE status = 'settled'`);
+        const printsAfter = await scalarIn(tx, sql`SELECT count(*)::text FROM trade_prints`);
+        check("settled trades survive the rollover", settledAfter === settledBefore, `${settledAfter} settled`);
+        check("the tape survives the rollover", printsAfter === printsBefore, `${printsAfter} prints`);
+        throw ROLLBACK2;
+      })
+      .catch((err) => {
+        if (err !== ROLLBACK2) throw err;
+      });
+    const stillOpen = Number(await scalar(sql`SELECT count(*)::text FROM orders WHERE status IN ('active','paused')`));
+    check("rollback restored the board", stillOpen >= 0, `${stillOpen} order(s) still open`);
+  }
 
   console.log("\n=== mark ladder ===");
   // Rung 2: a commodity whose window volume is under the floor must fall back to the last
