@@ -15,8 +15,11 @@ export type ServiceContractDto = {
   title: string;
   description: string | null;
   category: string | null;
-  /** Fixed price, or the ceiling in bid mode. */
-  payout: number | null;
+  /**
+   * Fixed price, or the ceiling in bid mode. Stays visible even on a classified contract —
+   * along with the title it is what someone needs to decide whether to take the job.
+   */
+  payout: number;
   status: string;
   locationName: string | null;
   imageFilename: string | null;
@@ -137,16 +140,17 @@ export async function listContractsBoard(db: Db, opts: ServiceContractListOption
     );
 
     if (!canSee) {
-      // A classified contract is its TITLE and nothing else. What survives below is only
-      // what the board physically cannot work without: the id to act on, the status and
-      // pricing mode to know which button to draw, and the viewer's own bid. Every field
-      // that says anything about the job, the money or the people is gone.
+      // A classified contract shows its TITLE and its PAYOUT — the two things someone needs
+      // to decide whether to take it — and nothing else. What else survives is only what the
+      // board physically cannot work without: the id to act on, the status and pricing mode
+      // to know which button to draw, and the viewer's own bid. Every field that describes
+      // the job, the location or the people is gone.
       return {
         id: r.id,
         title: r.title,
         description: null,
         category: null,
-        payout: null,
+        payout: Number(r.payout),
         status: r.status,
         locationName: null,
         imageFilename: null,
@@ -332,14 +336,10 @@ export async function placeBid(
     if (c.status !== "bidding") return { ok: false as const, error: `Bidding is ${c.status === "open" ? "not open" : "closed"}` };
     if (c.bidsCloseAt && c.bidsCloseAt <= new Date()) return { ok: false as const, error: "Bidding has closed" };
     if (opts.amount > c.payout) {
-      // On a classified contract the ceiling is itself redacted, so the rejection must not
-      // quote it — otherwise anyone could binary-search the budget from error messages.
+      // Safe to quote the ceiling: the payout is listed on classified contracts too.
       return {
         ok: false as const,
-        error:
-          c.visibility === "classified"
-            ? "That bid is above what the issuer is willing to pay. The ceiling is not disclosed on a classified contract."
-            : `Bid of ${opts.amount.toLocaleString()} aUEC is above the ${c.payout.toLocaleString()} ceiling.`,
+        error: `Bid of ${opts.amount.toLocaleString()} aUEC is above the ${c.payout.toLocaleString()} ceiling.`,
       };
     }
 

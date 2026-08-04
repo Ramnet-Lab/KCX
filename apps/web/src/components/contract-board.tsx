@@ -198,32 +198,29 @@ export function ContractBoard({
                 )}
                 <h3 className="text-sm font-bold text-ink">{c.title}</h3>
                 <span className="num ml-auto text-right text-sm font-bold text-up">
-                  {c.redacted ? (
-                    <span className="text-ink-faint">▩▩▩ aUEC</span>
-                  ) : c.awardedAmount != null ? (
+                  {c.awardedAmount != null ? (
                     <>
                       {fmt(c.awardedAmount)} aUEC
                       <span className="block text-[10px] font-normal text-ink-faint">
-                        won at · budget {fmt(c.payout ?? 0)}
+                        won at · budget {fmt(c.payout)}
                       </span>
                     </>
                   ) : c.pricingMode === "bid" ? (
                     <>
-                      ≤ {fmt(c.payout ?? 0)} aUEC
+                      ≤ {fmt(c.payout)} aUEC
                       <span className="block text-[10px] font-normal text-ink-faint">budget ceiling</span>
                     </>
                   ) : (
-                    <>{fmt(c.payout ?? 0)} aUEC</>
+                    <>{fmt(c.payout)} aUEC</>
                   )}
                 </span>
               </div>
 
               {c.redacted && (
                 <p className="mt-2 rounded border border-dashed border-danger/40 bg-danger/5 px-3 py-2 text-xs text-ink-faint">
-                  <span className="font-bold text-danger">Classified.</span> Everything except the
-                  title is withheld — the brief, the payout, the deadline, the location, any image
-                  and who posted it. All of it is released the moment you take this contract, and
-                  not before.
+                  <span className="font-bold text-danger">Classified.</span> You can see the title
+                  and the payout. The brief, the deadline, the location, any image and who posted
+                  it are released the moment you take this contract, and not before.
                 </p>
               )}
 
@@ -302,7 +299,7 @@ export function ContractBoard({
                 <p className="mt-2 rounded border border-line bg-panel-2 px-3 py-2 text-[11px] text-ink-faint">
                   Bids are sealed — you'll see the winning number when the window closes, not
                   before. The lowest bid wins automatically; ties go to whoever bid first. Your
-                  full {fmt(c.payout ?? 0)} aUEC ceiling stays committed until then.
+                  full {fmt(c.payout)} aUEC ceiling stays committed until then.
                 </p>
               )}
 
@@ -484,15 +481,13 @@ function BidPanel({
         <div className="mt-2 flex flex-wrap items-end gap-2">
           <label className="flex-1">
             <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">
-              {contract.payout != null
-                ? `Your price (aUEC) — must be at or under ${fmt(contract.payout)}`
-                : "Your price (aUEC) — the ceiling is not disclosed"}
+              Your price (aUEC) — must be at or under {fmt(contract.payout)}
             </span>
             <input
               type="number"
               inputMode="numeric"
               min={1}
-              max={contract.payout ?? undefined}
+              max={contract.payout}
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
               placeholder="0"
@@ -512,7 +507,7 @@ function BidPanel({
       <p className="mt-1 text-[11px] text-ink-faint">
         Sealed bidding — nobody sees your number, and you can't see theirs. Lowest bid wins when
         the window closes.
-        {contract.redacted && " This contract is classified: you're bidding on the title alone."}
+        {contract.redacted && " This contract is classified: you're bidding on the title and the ceiling alone."}
       </p>
     </div>
   );
@@ -764,20 +759,19 @@ function ComposeContract({ onPosted }: { onPosted: () => void }) {
               className="mt-0.5 h-4 w-4 accent-[#e8b449]"
             />
             <span className="text-xs">
-              <span className="font-bold text-ink">Classified — nothing but the title until someone takes it</span>
+              <span className="font-bold text-ink">Classified — only the title and the payout until someone takes it</span>
               <span className="mt-1 block text-[11px] text-ink-faint">
-                The brief, the payout, the deadline, the location, the image and your own name
-                are all withheld from the board. Everything is released the moment someone
-                takes the contract.
+                The brief, the deadline, the location, the image and your own name are all
+                withheld from the board. Everything is released the moment someone takes the
+                contract.
               </span>
             </span>
           </label>
           {classified && (
             <p className="mt-2 rounded bg-danger/10 px-2 py-1.5 text-[11px] text-danger">
-              The title is the only thing anyone sees — keep the target out of it, and make it
-              enough for someone to say yes to.
-              {pricingMode === "bid" &&
-                " Bidders won't see your ceiling either, so they'll be pricing the title alone."}
+              The title and the {pricingMode === "bid" ? "ceiling" : "payout"} are all anyone
+              sees — keep the target out of the title, and make it enough for someone to say
+              yes to.
             </p>
           )}
         </div>
