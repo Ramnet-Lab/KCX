@@ -15,6 +15,13 @@
       "when": 1785824934667,
       "tag": "0001_sticky_vulcan",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785826652531,
+      "tag": "0002_faulty_shatterstar",
+      "breakpoints": true
     }
   ]
 }

@@ -8,6 +8,7 @@ loadRootEnv();
 import {
   closeDb,
   expireStaleContracts,
+  expireServiceContracts,
   runMigrations,
   expireUnfilledOrders,
   getDb,
@@ -97,6 +98,8 @@ async function main() {
     // Self-heal any reserved_scu drift before deciding what has actually run out of time.
     const reconciled = await reconcileReservations(db);
     if (reconciled > 0) console.log(`[contracts] reconciled reserved_scu on ${reconciled} order(s)`);
+    const jobs = await expireServiceContracts(db);
+    if (jobs > 0) console.log(`[contracts] ${jobs} service contract(s) passed their deadline`);
     const n = await expireUnfilledOrders(db);
     if (n > 0) console.log(`[orders] ${n} order(s) hit their fill-by deadline → expired_unfilled`);
   });

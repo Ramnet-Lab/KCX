@@ -2,7 +2,7 @@ import { getDb, users } from "@kcx/db";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { SESSION_COOKIE, currentUser, devLoginEnabled } from "@/lib/session";
+import { createSession, currentUser, destroySession, devLoginEnabled } from "@/lib/session";
 
 /**
  * DEV-ONLY identity stub so the order board is usable before auth lands (M5).
@@ -43,20 +43,16 @@ export async function POST(request: Request) {
         .returning()
     )[0]!;
 
-  const res = NextResponse.json({
+  // Issue a REAL session rather than a parallel cookie scheme: the dev stub previously
+  // wrote the raw user id into the session cookie, which currentUser() (expecting a hashed
+  // token) rejected outright — dev sign-in looked successful and authenticated nothing.
+  await createSession(user.id);
+  return NextResponse.json({
     user: { id: user.id, handle: user.handle, displayName: user.displayName, isVerified: user.isVerified },
   });
-  res.cookies.set(SESSION_COOKIE, user.id, {
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 30,
-  });
-  return res;
 }
 
 export async function DELETE() {
-  const res = NextResponse.json({ user: null });
-  res.cookies.delete(SESSION_COOKIE);
-  return res;
+  await destroySession();
+  return NextResponse.json({ user: null });
 }
