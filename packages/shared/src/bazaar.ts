@@ -73,6 +73,11 @@ const base = {
   category: z.enum(BAZAAR_CATEGORIES).default("other"),
   locationId: z.number().int().positive().nullable().optional(),
   runForHours: z.number().int().positive().max(BAZAAR_MAX_HOURS).default(BAZAAR_DEFAULT_HOURS),
+  /**
+   * Post on an org's behalf. Changes whose money backs a wanted ad and where the proceeds
+   * of a sale land — checked server-side against the poster's role and delegated limit.
+   */
+  orgId: z.uuid().optional(),
 };
 
 /**

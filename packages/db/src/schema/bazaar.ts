@@ -15,6 +15,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { gameVersions, locations } from "./market";
+import { orgs } from "./orgs";
 import { users } from "./orders";
 
 /**
@@ -165,6 +166,15 @@ export const bazaarListings = pgTable(
     sellerId: uuid("seller_id")
       .notNull()
       .references(() => users.id),
+    /**
+     * Set when the poster is acting for an org rather than themselves.
+     *
+     * It changes WHOSE money is on the hook: a wanted ad posted for an org commits the org's
+     * treasury, not the poster's balance. The person stays recorded either way — an org
+     * cannot itself click anything, and "which member did this" is the first question asked
+     * when an org's money moves.
+     */
+    orgId: uuid("org_id").references(() => orgs.id),
     /** Patch-scoped like orders and contracts: a wipe ends every listing with it. */
     seasonId: integer("season_id")
       .notNull()
@@ -494,6 +504,13 @@ export const bazaarSales = pgTable(
     buyerId: uuid("buyer_id")
       .notNull()
       .references(() => users.id),
+    /**
+     * Which side, if either, was acting for an org — and therefore whose aUEC moves at
+     * settlement. Recorded on the sale rather than looked up from the listing because a
+     * listing can be edited afterwards and a struck deal cannot.
+     */
+    sellerOrgId: uuid("seller_org_id").references(() => orgs.id),
+    buyerOrgId: uuid("buyer_org_id").references(() => orgs.id),
     seasonId: integer("season_id")
       .notNull()
       .references(() => gameVersions.id),

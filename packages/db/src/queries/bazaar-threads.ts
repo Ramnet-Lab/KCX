@@ -4,6 +4,7 @@ import { bazaarListings, bazaarMessages, bazaarSales, bazaarThreads } from "../s
 import { users } from "../schema/orders";
 import { BAZAAR_SETTLE_HOURS } from "./bazaar";
 import { committedAuecSql } from "./collateral";
+import { canSpendOrgFunds } from "./orgs";
 
 /**
  * Negotiation on the bazaar: talking, offering, and turning an accepted offer into a sale.
@@ -359,22 +360,31 @@ export async function acceptBazaarOffer(
     // Intent decides the roles. On a WTS the poster sells; on a WTB the poster buys.
     const sellerId = l.intent === "buy" ? t.counterpartyId : l.sellerId;
     const buyerId = l.intent === "buy" ? l.sellerId : t.counterpartyId;
+    const buyerOrgId = l.intent === "buy" ? l.orgId : null;
+    const sellerOrgId = l.intent === "buy" ? null : l.orgId;
     const unitPrice = msg.offerUnitPrice!;
     const total = unitPrice * qty;
 
-    const capacity = await tx.execute<{ available: string }>(sql`
-      SELECT (coalesce((SELECT auec_balance FROM users WHERE id = ${buyerId}), 0)
-              - ${committedAuecSql(buyerId)})::text AS available
-    `);
-    const available = Number(capacity.rows[0]?.available ?? 0);
-    if (total > available) {
-      return {
-        ok: false as const,
-        error:
-          buyerId === opts.userId
-            ? `That costs ${total.toLocaleString()} aUEC but you have ${Math.max(0, available).toLocaleString()} free once your orders, contracts and bids are counted.`
-            : `They don't have ${total.toLocaleString()} aUEC free right now — their orders, contracts and bids are already committed against their declared balance.`,
-      };
+    // A purchase for an org is checked against the org's treasury and the acting member's
+    // delegated slice of it, not against the member's own balance.
+    if (buyerOrgId) {
+      const check = await canSpendOrgFunds(tx as unknown as Db, { orgId: buyerOrgId, userId: buyerId, amount: total });
+      if (!check.allowed) return { ok: false as const, error: check.reason ?? "The org can't cover that" };
+    } else {
+      const capacity = await tx.execute<{ available: string }>(sql`
+        SELECT (coalesce((SELECT auec_balance FROM users WHERE id = ${buyerId}), 0)
+                - ${committedAuecSql(buyerId)})::text AS available
+      `);
+      const available = Number(capacity.rows[0]?.available ?? 0);
+      if (total > available) {
+        return {
+          ok: false as const,
+          error:
+            buyerId === opts.userId
+              ? `That costs ${total.toLocaleString()} aUEC but you have ${Math.max(0, available).toLocaleString()} free once your orders, contracts and bids are counted.`
+              : `They don't have ${total.toLocaleString()} aUEC free right now — their orders, contracts and bids are already committed against their declared balance.`,
+        };
+      }
     }
 
     const now = new Date();
@@ -384,6 +394,8 @@ export async function acceptBazaarOffer(
         listingId: l.id,
         sellerId,
         buyerId,
+        sellerOrgId,
+        buyerOrgId,
         seasonId: l.seasonId,
         origin: "buy_now",
         quantity: qty,

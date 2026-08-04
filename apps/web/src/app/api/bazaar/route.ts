@@ -2,6 +2,7 @@ import {
   bazaarEvents,
   bazaarListings,
   buyCapacity,
+  canSpendOrgFunds,
   gameVersions,
   getBazaarItem,
   getDb,
@@ -82,15 +83,30 @@ export async function POST(request: Request) {
   // arbitrary item isn't a declared holding the exchange can check.
   if (input.intent === "buy") {
     const cost = (input.buyNowPrice ?? 0) * input.quantity;
-    const capacity = await buyCapacity(db, user.id);
-    if (cost > capacity.available) {
-      return NextResponse.json(
-        {
-          error: `That wanted ad commits ${cost.toLocaleString()} aUEC but you have ${Math.max(0, capacity.available).toLocaleString()} free — your orders, contracts, bids and other wanted ads are already committed against your declared balance.`,
-          capacity,
-        },
-        { status: 409 },
-      );
+    if (input.orgId) {
+      // Two ceilings: the org's uncommitted treasury, and this member's delegated slice.
+      const check = await canSpendOrgFunds(db, { orgId: input.orgId, userId: user.id, amount: cost });
+      if (!check.allowed) {
+        return NextResponse.json({ error: check.reason ?? "The org can't cover that", check }, { status: 409 });
+      }
+    } else {
+      const capacity = await buyCapacity(db, user.id);
+      if (cost > capacity.available) {
+        return NextResponse.json(
+          {
+            error: `That wanted ad commits ${cost.toLocaleString()} aUEC but you have ${Math.max(0, capacity.available).toLocaleString()} free — your orders, contracts, bids and other wanted ads are already committed against your declared balance.`,
+            capacity,
+          },
+          { status: 409 },
+        );
+      }
+    }
+  } else if (input.orgId) {
+    // Selling for an org moves no money up front, but it does route the proceeds to the
+    // treasury — so membership still has to be real.
+    const check = await canSpendOrgFunds(db, { orgId: input.orgId, userId: user.id, amount: 0 });
+    if (!check.allowed) {
+      return NextResponse.json({ error: check.reason ?? "You can't act for that org" }, { status: 403 });
     }
   }
 
@@ -117,6 +133,7 @@ export async function POST(request: Request) {
           // `sellerId` is the POSTER — the buyer on a wanted ad. See schema/bazaar.ts.
           sellerId: user.id,
           intent: input.intent,
+          orgId: input.orgId ?? null,
           seasonId: season.id,
           itemId,
           title: input.title,

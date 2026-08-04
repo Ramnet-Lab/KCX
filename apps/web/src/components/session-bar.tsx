@@ -40,9 +40,14 @@ export function DeskNavLink() {
   const { user, loaded } = useSession();
   if (!loaded || !user) return null;
   return (
-    <Link href="/manage" className="hover:text-ink" title="Your listings, contracts and orders">
-      My desk
-    </Link>
+    <>
+      <Link href="/manage" className="hover:text-ink" title="Your listings, contracts and orders">
+        My desk
+      </Link>
+      <Link href="/orgs" className="hover:text-ink" title="Trade as an org">
+        Orgs
+      </Link>
+    </>
   );
 }
 

@@ -11,6 +11,7 @@ import {
   bazaarRatings,
   bazaarSales,
 } from "../schema/bazaar";
+import { orgs } from "../schema/orgs";
 import { users } from "../schema/orders";
 import { committedAuecSql } from "./collateral";
 
@@ -498,6 +499,12 @@ export async function takeBazaarListing(
     const wantedAd = l.intent === "buy";
     const buyerId = wantedAd ? l.sellerId : opts.takerId;
     const sellerId = wantedAd ? opts.takerId : l.sellerId;
+    // Only the LISTING carries an org. The taker acts personally here — acting for an org
+    // when filling someone else's listing needs its own spend check, which the offer flow
+    // does properly; doing it implicitly on a one-click buy would spend org money without
+    // anyone having chosen to.
+    const buyerOrgId = wantedAd ? l.orgId : null;
+    const sellerOrgId = wantedAd ? null : l.orgId;
 
     if (!wantedAd) {
       const available = await availableAuec(tx, buyerId);
@@ -517,6 +524,8 @@ export async function takeBazaarListing(
         listingId: l.id,
         sellerId,
         buyerId,
+        sellerOrgId,
+        buyerOrgId,
         seasonId: l.seasonId,
         origin: "buy_now",
         quantity: qty,
@@ -728,22 +737,47 @@ export async function resolveBazaarSale(
     }
 
     // --- Both agreed: move the money ---
-    const [buyer] = await tx.select().from(users).where(eq(users.id, sale.buyerId)).for("update");
-    if ((buyer?.auecBalance ?? 0) < sale.totalPrice) {
-      return {
-        ok: false as const,
-        error: `The buyer has ${(buyer?.auecBalance ?? 0).toLocaleString()} aUEC declared but the sale is ${sale.totalPrice.toLocaleString()}. They need to update their declared balance before this can settle.`,
-      };
+    // Whose money depends on who was acting for whom. A purchase made on an org's behalf
+    // draws on its treasury, not on the member who clicked, and the proceeds of an org's
+    // sale land in the treasury rather than in the seller's pocket. Each side is decided
+    // independently — an org can perfectly well buy from an individual.
+    if (sale.buyerOrgId) {
+      const [org] = await tx.select().from(orgs).where(eq(orgs.id, sale.buyerOrgId)).for("update");
+      if ((org?.treasury ?? 0) < sale.totalPrice) {
+        return {
+          ok: false as const,
+          error: `${org?.name ?? "The buying org"} has ${(org?.treasury ?? 0).toLocaleString()} aUEC in its declared treasury but the sale is ${sale.totalPrice.toLocaleString()}. An owner or officer needs to top it up before this can settle.`,
+        };
+      }
+      await tx
+        .update(orgs)
+        .set({ treasury: sql`${orgs.treasury} - ${sale.totalPrice}`, updatedAt: now })
+        .where(eq(orgs.id, sale.buyerOrgId));
+    } else {
+      const [buyer] = await tx.select().from(users).where(eq(users.id, sale.buyerId)).for("update");
+      if ((buyer?.auecBalance ?? 0) < sale.totalPrice) {
+        return {
+          ok: false as const,
+          error: `The buyer has ${(buyer?.auecBalance ?? 0).toLocaleString()} aUEC declared but the sale is ${sale.totalPrice.toLocaleString()}. They need to update their declared balance before this can settle.`,
+        };
+      }
+      await tx
+        .update(users)
+        .set({ auecBalance: sql`${users.auecBalance} - ${sale.totalPrice}` })
+        .where(eq(users.id, sale.buyerId));
     }
 
-    await tx
-      .update(users)
-      .set({ auecBalance: sql`${users.auecBalance} - ${sale.totalPrice}` })
-      .where(eq(users.id, sale.buyerId));
-    await tx
-      .update(users)
-      .set({ auecBalance: sql`${users.auecBalance} + ${sale.totalPrice}` })
-      .where(eq(users.id, sale.sellerId));
+    if (sale.sellerOrgId) {
+      await tx
+        .update(orgs)
+        .set({ treasury: sql`${orgs.treasury} + ${sale.totalPrice}`, updatedAt: now })
+        .where(eq(orgs.id, sale.sellerOrgId));
+    } else {
+      await tx
+        .update(users)
+        .set({ auecBalance: sql`${users.auecBalance} + ${sale.totalPrice}` })
+        .where(eq(users.id, sale.sellerId));
+    }
 
     await tx
       .update(bazaarSales)

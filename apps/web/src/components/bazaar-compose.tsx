@@ -9,7 +9,7 @@ import {
   type BazaarIntent,
   type BazaarListingType,
 } from "@kcx/shared";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BazaarItemPicker, ItemPriceHistory, type PickedItem } from "@/components/bazaar-item-picker";
 import { fmtAuec } from "@/lib/countdown";
 
@@ -35,6 +35,8 @@ const MODES: { value: BazaarListingType; label: string; blurb: string }[] = [
  */
 export function BazaarCompose({ onPosted }: { onPosted: (id: string) => void }) {
   const [intent, setIntent] = useState<BazaarIntent>("sell");
+  const [orgId, setOrgId] = useState<string>("");
+  const [orgs, setOrgs] = useState<{ id: string; sid: string; name: string; myRole: string | null }[]>([]);
   const [item, setItem] = useState<PickedItem | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -50,6 +52,15 @@ export function BazaarCompose({ onPosted }: { onPosted: (id: string) => void }) 
 
   const isAuction = listingType !== "buy_now";
   const hasBuyNow = listingType !== "auction";
+
+  // Only orgs the trader can actually commit for are offered — showing one they'd be
+  // refused on is a form that fails at submit for a reason the form already knew.
+  useEffect(() => {
+    void fetch("/api/orgs")
+      .then((r) => (r.ok ? r.json() : { orgs: [] }))
+      .then((b) => setOrgs((b.orgs ?? []).filter((o: { myRole: string | null }) => o.myRole !== "member")))
+      .catch(() => {});
+  }, []);
 
   const addImages = (files: FileList | null) => {
     if (!files) return;
@@ -96,6 +107,7 @@ export function BazaarCompose({ onPosted }: { onPosted: (id: string) => void }) 
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           intent,
+          ...(orgId ? { orgId } : {}),
           title: title.trim(),
           description: description.trim() || undefined,
           // An id when they picked from the list, a name when they typed one the catalogue
@@ -169,6 +181,31 @@ export function BazaarCompose({ onPosted }: { onPosted: (id: string) => void }) 
             </button>
           </div>
         </div>
+
+        {orgs.length > 0 && (
+          <label className="block">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">Posting as</span>
+            <select
+              value={orgId}
+              onChange={(e) => setOrgId(e.target.value)}
+              className="mt-1 w-full rounded border border-line bg-bg px-2 py-1.5 text-sm text-ink focus:outline-none"
+            >
+              <option value="">Yourself</option>
+              {orgs.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name} ({o.sid})
+                </option>
+              ))}
+            </select>
+            {orgId && (
+              <span className="mt-1 block text-[11px] text-ink-faint">
+                {intent === "buy"
+                  ? "The org's treasury backs this ad, capped by your delegated limit."
+                  : "Proceeds go to the org's treasury, not your balance."}
+              </span>
+            )}
+          </label>
+        )}
 
         <div>
           <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">

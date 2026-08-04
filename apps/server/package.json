@@ -10,7 +10,8 @@
     "ingest": "tsx src/scripts/ingest.ts",
     "sync:items": "tsx src/scripts/sync-items.ts",
     "check:bazaar": "tsx src/scripts/check-bazaar.ts",
-    "check:alerts": "tsx src/scripts/check-alerts.ts"
+    "check:alerts": "tsx src/scripts/check-alerts.ts",
+    "check:orgs": "tsx src/scripts/check-orgs.ts"
   },
   "dependencies": {
     "@kcx/db": "workspace:*",
