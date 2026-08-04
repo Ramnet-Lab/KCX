@@ -1,5 +1,6 @@
 import {
   ORG_CHARTER_FIELDS,
+  orgs,
   ORG_VERIFY_MAX_ATTEMPTS,
   completeOrgVerification,
   getDb,
@@ -8,6 +9,7 @@ import {
   startOrgVerification,
 } from "@kcx/db";
 import { generateVerificationCode } from "@kcx/shared";
+import { eq } from "drizzle-orm";
 import { randomInt } from "node:crypto";
 import { storeUploadedImage } from "@/lib/uploads";
 
@@ -134,4 +136,97 @@ export async function checkOrgClaim(orgId: string, sid: string): Promise<OrgVeri
   const result = await completeOrgVerification(db, { verificationId: claim.id, logoFilename });
   if (!result.ok) return { ok: false, reason: "no_claim", message: result.error };
   return { ok: true, orgId };
+}
+
+/** Retry a missing logo at most this often. Orgs with no logo at all do exist. */
+const PROFILE_REFRESH_HOURS = 24;
+
+/**
+ * Fill in an org's public name and logo from its RSI page.
+ *
+ * These are public facts on a page anyone can read, so they are deliberately NOT gated
+ * behind a leadership claim — doing that meant every unverified org rendered blank, and
+ * unverified is the state every org starts in. The directory looked broken as a result.
+ *
+ * Called lazily when an org page is viewed and something is missing, never in a loop over
+ * the directory: one org viewed is at most one outbound request, and only if we haven't
+ * asked in the last day. That keeps this indistinguishable from a human opening the page,
+ * which is the standard the rest of our RSI reads are held to.
+ *
+ * Entirely best-effort. A missing logo is a blank square, never a failed page.
+ */
+export async function refreshOrgPublicProfile(orgId: string, sid: string): Promise<void> {
+  const db = getDb();
+  const [org] = await db.select().from(orgs).where(eq(orgs.id, orgId));
+  if (!org) return;
+
+  const needsLogo = !org.logoFilename;
+  // A name equal to the SID means it came from the backfill, which only had the SID.
+  const needsName = org.name === org.sid;
+  if (!needsLogo && !needsName) return;
+  if (org.profileFetchedAt && Date.now() - org.profileFetchedAt.getTime() < PROFILE_REFRESH_HOURS * 3_600_000) {
+    return;
+  }
+
+  // Stamped BEFORE the fetch, so a page that errors or has no logo still counts as tried.
+  // Stamping afterwards would retry every view for exactly the orgs that never resolve.
+  await db.update(orgs).set({ profileFetchedAt: new Date() }).where(eq(orgs.id, orgId));
+
+  let html: string;
+  try {
+    const res = await fetch(`${ORG_PAGE_BASE}/${encodeURIComponent(sid)}`, {
+      headers: { "User-Agent": UA },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return;
+    html = await res.text();
+  } catch {
+    return;
+  }
+
+  const patch: { name?: string; logoFilename?: string } = {};
+
+  if (needsName) {
+    const name = extractOrgName(html);
+    if (name && name !== sid) patch.name = name;
+  }
+
+  if (needsLogo) {
+    const logoUrl = extractOrgLogoUrl(html);
+    if (logoUrl) {
+      try {
+        const res = await fetch(logoUrl, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(15_000) });
+        if (res.ok) {
+          // Through the ordinary pipeline: magic-byte sniffed and given a generated name,
+          // because "it came from RSI" is not the same as "it is an image".
+          const stored = await storeUploadedImage(Buffer.from(await res.arrayBuffer()), "orgs");
+          if (stored.ok) patch.logoFilename = stored.image.filename;
+        }
+      } catch {
+        /* blank square is fine */
+      }
+    }
+  }
+
+  if (Object.keys(patch).length > 0) {
+    await db.update(orgs).set({ ...patch, updatedAt: new Date() }).where(eq(orgs.id, orgId));
+  }
+}
+
+/** The org's display name from its public page header. */
+export function extractOrgName(html: string): string | null {
+  const m =
+    html.match(/<h1[^>]*>\s*([^<]+?)\s*(?:<span|<\/h1>)/i) ??
+    html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]+)"/i);
+  const raw = m?.[1]?.trim();
+  if (!raw) return null;
+  // The header renders as "Maikoh Company / MAIKOHCO", with the SID inside its own span —
+  // so the capture stops at the tag and leaves a dangling separator behind. Strip the SID
+  // if it survived, then any trailing separator, or every org name ends in " /".
+  return (
+    raw
+      .replace(/\s*[/|–-]\s*[A-Z0-9]{3,20}\s*$/, "")
+      .replace(/\s*[/|–-]\s*$/, "")
+      .trim() || null
+  );
 }

@@ -18,6 +18,7 @@ import {
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { OrgConsole } from "@/components/org-console";
+import { refreshOrgPublicProfile } from "@/lib/org-verify";
 import { currentUser } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -56,7 +57,14 @@ export default async function OrgsPage({
     // A no-op once it exists, so it costs one indexed read on every other visit.
     await backfillOrgMembership(db, user.id);
     orgs = await listMyOrgs(db, user.id);
-    const selected = orgs.find((o) => o.id === id) ?? orgs[0];
+    let selected = orgs.find((o) => o.id === id) ?? orgs[0];
+    // Same lazy fill as the public page: only for the org actually being looked at, never
+    // in a loop over the directory.
+    if (selected) {
+      await refreshOrgPublicProfile(selected.id, selected.sid).catch(() => {});
+      orgs = await listMyOrgs(db, user.id);
+      selected = orgs.find((o) => o.id === id) ?? orgs[0];
+    }
 
     directory = await listPublicOrgs(db, {});
     if (selected) {

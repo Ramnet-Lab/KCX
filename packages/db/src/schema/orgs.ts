@@ -86,8 +86,21 @@ export const orgs = pgTable(
     verifiedByModId: uuid("verified_by_mod_id").references(() => users.id),
     suspendedReason: text("suspended_reason"),
 
-    /** Cached from RSI on verification. Bare filename, served from the `orgs` bucket. */
+    /**
+     * Cached from the org's public RSI page. Bare filename, served from the `orgs` bucket.
+     *
+     * Deliberately NOT tied to verification. An org's name and logo are public facts on a
+     * page anyone can read — gating them behind a leadership claim meant every unverified
+     * org rendered blank, which is every org until somebody proves it.
+     */
     logoFilename: text("logo_filename"),
+    /**
+     * When the public page was last read, so a missing logo is retried at most daily.
+     *
+     * Orgs whose page has no logo at all exist, and without this they would be re-fetched on
+     * every single view — which is exactly the crawling RSI's terms ask us not to do.
+     */
+    profileFetchedAt: timestamp("profile_fetched_at", { withTimezone: true }),
 
     /**
      * Self-declared aUEC held by the org, on the same footing as a personal balance. KCX

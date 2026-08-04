@@ -1,5 +1,5 @@
 {
-  "id": "2f370b0c-0b58-4f0c-9890-8f46e03bd1e4",
+  "id": "08d8db58-264d-4edb-a791-df6bed859e55",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -4901,6 +4901,12 @@
         "logo_filename": {
           "name": "logo_filename",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "profile_fetched_at": {
+          "name": "profile_fetched_at",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },

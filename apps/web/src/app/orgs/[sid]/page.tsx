@@ -10,6 +10,7 @@ import {
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { OrgContactButton } from "@/components/org-contact";
+import { refreshOrgPublicProfile } from "@/lib/org-verify";
 import { OrgPublicProfile } from "@/components/org-public-profile";
 import { currentUser } from "@/lib/session";
 
@@ -46,8 +47,13 @@ export default async function OrgPage({ params }: { params: Promise<{ sid: strin
   const user = await currentUser();
 
   const db = getDb();
-  const org = await getOrgBySid(db, sid, user?.id ?? null).catch(() => null);
+  let org = await getOrgBySid(db, sid, user?.id ?? null).catch(() => null);
   if (!org) notFound();
+
+  // Fill in the name and logo from the org's public RSI page if we haven't yet. Throttled
+  // to once a day per org, so a page view is at most one outbound request.
+  await refreshOrgPublicProfile(org.id, org.sid).catch(() => {});
+  org = (await getOrgBySid(db, sid, user?.id ?? null).catch(() => null)) ?? org;
 
   let listings: BazaarListingDto[] = [];
   let contracts: ServiceContractDto[] = [];

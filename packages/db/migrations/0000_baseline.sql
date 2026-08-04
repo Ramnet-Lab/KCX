@@ -505,6 +505,7 @@ CREATE TABLE "orgs" (
 	"verified_by_mod_id" uuid,
 	"suspended_reason" text,
 	"logo_filename" text,
+	"profile_fetched_at" timestamp with time zone,
 	"treasury" bigint DEFAULT 0 NOT NULL,
 	"description" text,
 	"board_threshold" smallint DEFAULT 0 NOT NULL,
