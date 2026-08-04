@@ -35,6 +35,9 @@ importers:
       socket.io:
         specifier: 4.8.3
         version: 4.8.3(supports-color@10.2.2)
+      tsx:
+        specifier: 4.23.5
+        version: 4.23.5
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -45,9 +48,6 @@ importers:
       '@types/pg':
         specifier: 8.20.3
         version: 8.20.3
-      tsx:
-        specifier: 4.23.5
-        version: 4.23.5
       typescript:
         specifier: 5.9.3
         version: 5.9.3

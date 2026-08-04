@@ -208,7 +208,7 @@ smoke_test() {
 
 seed_prices() {
   say "Loading market data from UEX"
-  if compose exec -T server node --import tsx apps/server/src/scripts/ingest.ts; then
+  if compose exec -T server node --import tsx src/scripts/ingest.ts; then
     ok "commodities, terminals and prices loaded"
   else
     warn "ingest failed — the scheduled poller will retry within 30 minutes"

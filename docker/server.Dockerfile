@@ -17,8 +17,9 @@ COPY apps/web/package.json apps/web/
 COPY apps/server/package.json apps/server/
 COPY packages/db/package.json packages/db/
 COPY packages/shared/package.json packages/shared/
-# --ignore-scripts: no native builds needed here, and it keeps the image reproducible.
-RUN pnpm install --frozen-lockfile --filter @kcx/server... --ignore-scripts
+# Scripts must run: tsx depends on esbuild, whose postinstall places the platform binary.
+# (pnpm-workspace.yaml already allow-lists the esbuild build.)
+RUN pnpm install --frozen-lockfile --filter @kcx/server...
 
 FROM node:24-alpine AS runner
 RUN apk add --no-cache libc6-compat
@@ -38,4 +39,7 @@ USER kcx
 EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:4000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["node", "--import", "tsx", "apps/server/src/main.ts"]
+# Run FROM the package directory: pnpm installs tsx into apps/server/node_modules, so
+# `--import tsx` cannot resolve it from /app.
+WORKDIR /app/apps/server
+CMD ["node", "--import", "tsx", "src/main.ts"]
