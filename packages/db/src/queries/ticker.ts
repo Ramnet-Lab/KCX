@@ -61,6 +61,13 @@ export async function tickerEntries(db: Db): Promise<TickerEntry[]> {
     FROM commodities c
     JOIN commodity_marks_latest m ON m.commodity_id = c.id
     WHERE c.is_tradable
+      -- A marks row exists for every tradable commodity, including ones no terminal
+      -- currently trades and no player has ever traded. Those have no price of any kind and
+      -- must not occupy a tile — the previous ticker read the reference points, which only
+      -- existed where a price did, so surfacing them now would be a regression dressed up as
+      -- extra coverage. The row still gets written, so the commodity appears the moment it
+      -- has a price.
+      AND (m.mark_price IS NOT NULL OR m.best_sell IS NOT NULL OR m.best_buy IS NOT NULL)
     ORDER BY c.name
   `);
 
