@@ -1,11 +1,14 @@
-import { getDb, respondToAward } from "@kcx/db";
+import { CLASSIFIED_ACK_REQUIRED, getDb, respondToAward } from "@kcx/db";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { currentUser } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
-const input = z.object({ action: z.enum(["accept", "decline"]) });
+const input = z.object({
+  action: z.enum(["accept", "decline"]),
+  acknowledgedClassified: z.boolean().optional(),
+});
 
 /**
  * POST — the winning bidder takes the job or turns it down.
@@ -28,8 +31,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       contractId: id,
       userId: user.id,
       action: parsed.data.action,
+      acknowledgedClassified: parsed.data.acknowledgedClassified,
     });
-    if (!result.ok) return NextResponse.json({ error: result.error }, { status: 409 });
+    if (!result.ok) {
+      if (result.error === CLASSIFIED_ACK_REQUIRED) {
+        return NextResponse.json({ error: "Conditions of access must be accepted first", needsClassifiedAck: true }, { status: 428 });
+      }
+      return NextResponse.json({ error: result.error }, { status: 409 });
+    }
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("[contracts:award]", err instanceof Error ? err.message : err);

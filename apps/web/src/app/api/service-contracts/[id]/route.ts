@@ -1,11 +1,15 @@
-import { claimContract, getDb, resolveServiceContract } from "@kcx/db";
+import { CLASSIFIED_ACK_REQUIRED, claimContract, getDb, resolveServiceContract } from "@kcx/db";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { currentUser } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
-const input = z.object({ action: z.enum(["claim", "confirm", "cancel"]) });
+const input = z.object({
+  action: z.enum(["claim", "confirm", "cancel"]),
+  /** Set by the client only after the conditions-of-access dialog has been accepted. */
+  acknowledgedClassified: z.boolean().optional(),
+});
 
 /** PATCH — claim a contract, confirm completion, or step away from it. */
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -21,9 +25,17 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     const db = getDb();
     const result =
       parsed.data.action === "claim"
-        ? await claimContract(db, id, user.id)
+        ? await claimContract(db, id, user.id, {
+            acknowledgedClassified: parsed.data.acknowledgedClassified,
+          })
         : await resolveServiceContract(db, { contractId: id, userId: user.id, action: parsed.data.action });
-    if (!result.ok) return NextResponse.json({ error: result.error }, { status: 409 });
+    if (!result.ok) {
+      // A distinct signal, not just prose: the client shows the briefing and retries.
+      if (result.error === CLASSIFIED_ACK_REQUIRED) {
+        return NextResponse.json({ error: "Conditions of access must be accepted first", needsClassifiedAck: true }, { status: 428 });
+      }
+      return NextResponse.json({ error: result.error }, { status: 409 });
+    }
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("[contracts:action]", err instanceof Error ? err.message : err);

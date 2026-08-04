@@ -223,7 +223,65 @@ export const CONTRACT_EVENT_TYPES = [
   "award_lapsed",
   /** Every bidder declined or lapsed; nothing left to cascade to. */
   "bidding_exhausted",
+  // --- classified handling ---
+  /** Executor accepted the conditions of access before the brief was released. */
+  "classified_acknowledged",
+  "breach_reported",
+  "breach_disputed",
+  "breach_upheld",
+  "breach_dismissed",
 ] as const;
+
+export const BREACH_STATUSES = [
+  /** Filed by the issuer; counts against the executor unless dismissed. */
+  "reported",
+  /** The accused rejects it — still counted, but shown as contested. */
+  "disputed",
+  /** A moderator agreed with the issuer. */
+  "upheld",
+  /** A moderator threw it out; stops counting. */
+  "dismissed",
+] as const;
+
+/**
+ * Breaches of a classified contract's conditions of access.
+ *
+ * Only the issuer of a classified contract can file one, and only against the executor who
+ * accepted it — the acknowledgement recorded at acceptance is what gives the claim its
+ * footing. One per contract, so a single grievance can't be stacked into a reputation.
+ *
+ * A filed breach counts immediately rather than waiting on review, because a leak has
+ * already happened by the time anyone notices and a deterrent that lags by days deters
+ * nothing. The accused can dispute it — which does not hide it, but marks it contested
+ * wherever it appears — and a moderator can dismiss it, which removes it from the count.
+ */
+export const contractBreaches = pgTable(
+  "contract_breaches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    contractId: uuid("contract_id")
+      .notNull()
+      .references(() => serviceContracts.id),
+    /** The executor who accepted the conditions and is said to have broken them. */
+    accusedId: uuid("accused_id")
+      .notNull()
+      .references(() => users.id),
+    reportedById: uuid("reported_by_id")
+      .notNull()
+      .references(() => users.id),
+    status: text("status", { enum: BREACH_STATUSES }).notNull().default("reported"),
+    reason: text("reason").notNull(),
+    /** The accused's side of it, if they dispute. */
+    response: text("response"),
+    resolvedById: uuid("resolved_by_id").references(() => users.id),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("contract_breaches_once").on(t.contractId),
+    index("contract_breaches_accused").on(t.accusedId, t.status),
+  ],
+);
 
 /** Append-only audit trail; contract state is always reconstructible from these. */
 export const contractEvents = pgTable(

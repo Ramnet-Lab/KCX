@@ -50,6 +50,13 @@
       "when": 1785859306904,
       "tag": "0006_ancient_mattie_franklin",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1785861560029,
+      "tag": "0007_sudden_tempest",
+      "breakpoints": true
     }
   ]
 }

@@ -3,7 +3,8 @@
 import type { ServiceContractDto } from "@kcx/db";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
-import { StarPicker } from "@/components/trader-standing";
+import { ClassifiedBriefing } from "@/components/classified-briefing";
+import { ContractStandingBadge, StarPicker } from "@/components/trader-standing";
 
 const fmt = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 0 });
 
@@ -62,6 +63,7 @@ export function ContractBoard({
   const [composing, setComposing] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [briefing, setBriefing] = useState<{ contract: ServiceContractDto; kind: "claim" | "award" } | null>(null);
   const router = useRouter();
 
   const refresh = async () => {
@@ -70,16 +72,21 @@ export function ContractBoard({
     router.refresh();
   };
 
-  const act = async (id: string, action: "claim" | "confirm" | "cancel") => {
+  const act = async (id: string, action: "claim" | "confirm" | "cancel", acknowledgedClassified?: boolean) => {
     setBusy(id);
     setError(null);
     try {
       const res = await fetch(`/api/service-contracts/${id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, ...(acknowledgedClassified ? { acknowledgedClassified } : {}) }),
       });
       const body = await res.json().catch(() => ({}));
+      if (res.status === 428 || body.needsClassifiedAck) {
+        // Server insists on the briefing — open it rather than surfacing a raw error.
+        setBriefing({ contract: contracts.find((c) => c.id === id)!, kind: "claim" });
+        return;
+      }
       if (!res.ok) setError(body.error ?? "Failed");
       else await refresh();
     } finally {
@@ -87,21 +94,38 @@ export function ContractBoard({
     }
   };
 
-  const respondToAward = async (id: string, action: "accept" | "decline") => {
+  /** Take a contract, showing the conditions-of-access briefing first when classified. */
+  const take = (c: ServiceContractDto) => {
+    if (!signedIn) return router.push("/signin");
+    if (c.visibility === "classified") return setBriefing({ contract: c, kind: "claim" });
+    void act(c.id, "claim");
+  };
+
+  const respondToAward = async (id: string, action: "accept" | "decline", acknowledgedClassified?: boolean) => {
     setBusy(id);
     setError(null);
     try {
       const res = await fetch(`/api/service-contracts/${id}/award`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, ...(acknowledgedClassified ? { acknowledgedClassified } : {}) }),
       });
       const body = await res.json().catch(() => ({}));
+      if (res.status === 428 || body.needsClassifiedAck) {
+        setBriefing({ contract: contracts.find((c) => c.id === id)!, kind: "award" });
+        return;
+      }
       if (!res.ok) setError(body.error ?? "Failed");
       else await refresh();
     } finally {
       setBusy(null);
     }
+  };
+
+  /** Accept an auction win — briefing first if the contract is classified. */
+  const acceptAward = (c: ServiceContractDto) => {
+    if (c.visibility === "classified") return setBriefing({ contract: c, kind: "award" });
+    void respondToAward(c.id, "accept");
   };
 
   const withdrawBid = async (id: string) => {
@@ -129,6 +153,21 @@ export function ContractBoard({
 
   return (
     <div>
+      {briefing && (
+        <ClassifiedBriefing
+          title={briefing.contract.title}
+          payout={briefing.contract.payout}
+          busy={busy === briefing.contract.id}
+          onCancel={() => setBriefing(null)}
+          onAccept={async () => {
+            const { contract, kind } = briefing;
+            setBriefing(null);
+            if (kind === "claim") await act(contract.id, "claim", true);
+            else await respondToAward(contract.id, "accept", true);
+          }}
+        />
+      )}
+
       {pendingRatings.length > 0 && <RateContractsPanel pending={pendingRatings} onDone={refresh} />}
 
       <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
@@ -246,15 +285,17 @@ export function ContractBoard({
 
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-faint">
                 {c.issuerName ? (
-                  <span>
+                  <span className="flex items-center gap-1.5">
                     posted by <span className="text-ink-dim">{c.issuerName}</span>
+                    {c.issuerStanding && <ContractStandingBadge {...c.issuerStanding} compact />}
                   </span>
                 ) : (
                   <span className="text-ink-faint">issuer withheld</span>
                 )}
                 {c.executorName && (
-                  <span>
+                  <span className="flex items-center gap-1.5">
                     taken by <span className="text-ink-dim">{c.executorName}</span>
+                    {c.executorStanding && <ContractStandingBadge {...c.executorStanding} compact />}
                   </span>
                 )}
                 {c.expiresAt && <span suppressHydrationWarning>{timeLeft(c.expiresAt)}</span>}
@@ -312,11 +353,11 @@ export function ContractBoard({
                   </p>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <button
-                      onClick={() => respondToAward(c.id, "accept")}
+                      onClick={() => acceptAward(c)}
                       disabled={busy === c.id}
                       className="tap rounded bg-up/20 px-3 py-1 text-xs font-bold text-up hover:bg-up/30 disabled:opacity-50"
                     >
-                      Accept and start
+                      {c.visibility === "classified" ? "Review conditions and accept" : "Accept and start"}
                     </button>
                     <button
                       onClick={() => respondToAward(c.id, "decline")}
@@ -332,14 +373,37 @@ export function ContractBoard({
                 </div>
               )}
 
+              {c.breach && (
+                <div className="mt-2 rounded border border-danger/40 bg-danger/5 px-3 py-2 text-xs">
+                  <p className="font-bold text-danger">
+                    ▩ Breach of conditions {c.breach.status === "dismissed" ? "— dismissed by a moderator" : "recorded"}
+                    {c.breach.status === "disputed" && " — contested"}
+                    {c.breach.status === "upheld" && " — upheld"}
+                  </p>
+                  <p className="mt-1 whitespace-pre-wrap text-ink-dim">{c.breach.reason}</p>
+                  {c.breach.response && (
+                    <p className="mt-1 whitespace-pre-wrap border-l-2 border-line pl-2 text-ink-faint">
+                      Reply: {c.breach.response}
+                    </p>
+                  )}
+                  {c.isExecutor && c.breach.status === "reported" && (
+                    <BreachAction id={c.id} action="dispute" onDone={refresh} onError={setError} />
+                  )}
+                </div>
+              )}
+
+              {c.visibility === "classified" && c.isIssuer && c.executorId && !c.breach && (
+                <BreachAction id={c.id} action="report" onDone={refresh} onError={setError} />
+              )}
+
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 {c.status === "open" && !c.isIssuer && (
                   <button
-                    onClick={() => (signedIn ? act(c.id, "claim") : router.push("/signin"))}
+                    onClick={() => take(c)}
                     disabled={busy === c.id}
                     className="tap rounded bg-up/20 px-3 py-1 text-xs font-bold text-up hover:bg-up/30 disabled:opacity-50"
                   >
-                    {c.redacted ? "Take it — details revealed on accept" : "Take this contract"}
+                    {c.visibility === "classified" ? "Request access to this contract" : "Take this contract"}
                   </button>
                 )}
                 {c.status === "in_progress" && (c.isIssuer || c.isExecutor) && (
@@ -383,6 +447,97 @@ export function ContractBoard({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Report a breach, or reply to one.
+ *
+ * Both sides go through the same small form on purpose: filing a breach and answering one are
+ * equally consequential, and neither should be a single unconsidered tap.
+ */
+function BreachAction({
+  id,
+  action,
+  onDone,
+  onError,
+}: {
+  id: string;
+  action: "report" | "dispute";
+  onDone: () => void;
+  onError: (msg: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const reporting = action === "report";
+
+  const submit = async () => {
+    setBusy(true);
+    onError(null);
+    try {
+      const res = await fetch(`/api/service-contracts/${id}/breach`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(reporting ? { action, reason: text.trim() } : { action, response: text.trim() }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) onError(body.error ?? "Failed");
+      else {
+        setOpen(false);
+        setText("");
+        onDone();
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className={`tap mt-2 text-[11px] ${reporting ? "text-ink-faint hover:text-danger" : "text-accent hover:underline"}`}
+      >
+        {reporting ? "Report a breach of conditions" : "Dispute this"}
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-2 rounded border border-danger/40 bg-panel-2 p-3">
+      <p className="mb-2 text-[11px] text-ink-dim">
+        {reporting
+          ? "Describe what was disclosed and where. This is recorded against their contract standing and shown publicly, so be specific and factual."
+          : "Give your side. It's shown alongside the claim, and a moderator can dismiss the breach entirely."}
+      </p>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={3}
+        maxLength={1000}
+        placeholder={reporting ? "What was shared, with whom, and how you know" : "Your account of what happened"}
+        className="w-full rounded border border-line bg-bg px-2 py-1.5 text-xs text-ink placeholder:text-ink-faint focus:outline-none"
+      />
+      <div className="mt-2 flex items-center gap-2">
+        <button
+          onClick={submit}
+          disabled={busy || text.trim().length < 10}
+          className="tap rounded bg-danger/20 px-3 py-1 text-xs font-bold text-danger hover:bg-danger/30 disabled:opacity-40"
+        >
+          {busy ? "…" : reporting ? "File breach" : "Submit reply"}
+        </button>
+        <button
+          onClick={() => {
+            setOpen(false);
+            setText("");
+          }}
+          className="tap text-xs text-ink-faint hover:text-ink"
+        >
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }

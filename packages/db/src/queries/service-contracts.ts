@@ -1,6 +1,6 @@
 import { and, asc, eq, lte, sql } from "drizzle-orm";
 import type { Db } from "../client";
-import { contractBids, contractEvents, contractRatings, serviceContracts } from "../schema/contracts";
+import { contractBids, contractBreaches, contractEvents, contractRatings, serviceContracts } from "../schema/contracts";
 import { users } from "../schema/orders";
 
 /**
@@ -51,6 +51,12 @@ export type ServiceContractDto = {
   bidCount: number;
   myBid: { amount: number; status: string; note: string | null } | null;
   isAwardee: boolean;
+
+  /** Contract standing of the two parties, so the board needn't fetch it separately. */
+  issuerStanding: ContractStanding | null;
+  executorStanding: ContractStanding | null;
+  /** Breach on this specific contract, if one has been filed. */
+  breach: { status: string; reason: string; response: string | null } | null;
 };
 
 export type ServiceContractListOptions = {
@@ -96,6 +102,7 @@ export async function listContractsBoard(db: Db, opts: ServiceContractListOption
     awarded_to_id: string | null; awarded_to_name: string | null;
     awarded_amount: string | null; award_expires_at: string | Date | null;
     bid_count: number; my_bid_amount: string | null; my_bid_status: string | null; my_bid_note: string | null;
+    breach_status: string | null; breach_reason: string | null; breach_response: string | null;
   }>(sql`
     SELECT c.id::text, c.title, c.description, c.category, c.payout::text, c.status,
            l.name AS location_name, c.image_filename,
@@ -107,7 +114,8 @@ export async function listContractsBoard(db: Db, opts: ServiceContractListOption
            c.awarded_to_id::text, awd.display_name AS awarded_to_name,
            c.awarded_amount::text, c.award_expires_at,
            coalesce(b.bid_count, 0)::int AS bid_count,
-           mine.amount::text AS my_bid_amount, mine.status AS my_bid_status, mine.note AS my_bid_note
+           mine.amount::text AS my_bid_amount, mine.status AS my_bid_status, mine.note AS my_bid_note,
+           br.status AS breach_status, br.reason AS breach_reason, br.response AS breach_response
     FROM service_contracts c
     JOIN users iss ON iss.id = c.issuer_id
     LEFT JOIN users exe ON exe.id = c.executor_id
@@ -122,11 +130,18 @@ export async function listContractsBoard(db: Db, opts: ServiceContractListOption
       WHERE cb.contract_id = c.id
         AND ${viewer ? sql`cb.bidder_id = ${viewer}::uuid` : sql`false`}
     ) mine ON true
+    LEFT JOIN contract_breaches br ON br.contract_id = c.id
     WHERE c.status IN (${sql.join(statuses.map((st) => sql`${st}`), sql`, `)})
       ${opts.mineOnly && viewer ? sql`AND (c.issuer_id = ${viewer}::uuid OR c.executor_id = ${viewer}::uuid OR c.awarded_to_id = ${viewer}::uuid)` : sql``}
     ORDER BY c.created_at DESC
     LIMIT ${Math.min(opts.limit ?? 200, 500)}
   `);
+
+  // One standing lookup for every party on the board, rather than one per card.
+  const standings = await contractStandingFor(
+    db,
+    rows.rows.flatMap((r) => [r.issuer_id, r.executor_id].filter((id): id is string => !!id)),
+  );
 
   return rows.rows.map((r) => {
     const isIssuer = viewer != null && r.issuer_id === viewer;
@@ -184,6 +199,10 @@ export async function listContractsBoard(db: Db, opts: ServiceContractListOption
             ? { amount: Number(r.my_bid_amount), status: r.my_bid_status!, note: r.my_bid_note }
             : null,
         isAwardee: viewer != null && r.awarded_to_id === viewer,
+        // Standing belongs to the people, and the people are redacted here.
+        issuerStanding: null,
+        executorStanding: null,
+        breach: null,
       };
     }
 
@@ -221,6 +240,11 @@ export async function listContractsBoard(db: Db, opts: ServiceContractListOption
           ? { amount: Number(r.my_bid_amount), status: r.my_bid_status!, note: r.my_bid_note }
           : null,
       isAwardee: viewer != null && r.awarded_to_id === viewer,
+      issuerStanding: standings.get(r.issuer_id) ?? EMPTY_CONTRACT_STANDING,
+      executorStanding: r.executor_id ? (standings.get(r.executor_id) ?? EMPTY_CONTRACT_STANDING) : null,
+      breach: r.breach_status
+        ? { status: r.breach_status, reason: r.breach_reason!, response: r.breach_response }
+        : null,
     };
   });
 }
@@ -435,7 +459,7 @@ export async function closeContractBidding(db: Db): Promise<number> {
 /** The winner accepts the award (becoming the executor) or turns it down. */
 export async function respondToAward(
   db: Db,
-  opts: { contractId: string; userId: string; action: "accept" | "decline" },
+  opts: { contractId: string; userId: string; action: "accept" | "decline"; acknowledgedClassified?: boolean },
 ): Promise<ServiceContractResult> {
   return db.transaction(async (tx) => {
     const [c] = await tx.select().from(serviceContracts).where(eq(serviceContracts.id, opts.contractId)).for("update");
@@ -453,11 +477,22 @@ export async function respondToAward(
     }
 
     if (c.expiresAt <= now) return { ok: false as const, error: "Contract has expired" };
+    if (c.visibility === "classified" && !opts.acknowledgedClassified) {
+      return { ok: false as const, error: CLASSIFIED_ACK_REQUIRED };
+    }
 
     await tx
       .update(serviceContracts)
       .set({ executorId: opts.userId, status: "in_progress", claimedAt: now, updatedAt: now })
       .where(eq(serviceContracts.id, c.id));
+    if (c.visibility === "classified") {
+      await tx.insert(contractEvents).values({
+        contractId: c.id,
+        actorId: opts.userId,
+        type: "classified_acknowledged",
+        data: {},
+      });
+    }
     // Everyone else's bid is settled now, so the board stops showing them as live.
     await tx
       .update(contractBids)
@@ -492,8 +527,20 @@ export async function expireContractAwards(db: Db): Promise<number> {
   return lapsed;
 }
 
+/**
+ * Error returned when someone tries to take a classified contract without acknowledging the
+ * conditions of access. Enforced here rather than in the UI: the acknowledgement is what a
+ * later breach claim rests on, so a client that skips the dialog must not get the brief.
+ */
+export const CLASSIFIED_ACK_REQUIRED = "classified_ack_required";
+
 /** Claim an open contract, locking it so several executors don't all start the same job. */
-export async function claimContract(db: Db, contractId: string, executorId: string): Promise<ServiceContractResult> {
+export async function claimContract(
+  db: Db,
+  contractId: string,
+  executorId: string,
+  opts: { acknowledgedClassified?: boolean } = {},
+): Promise<ServiceContractResult> {
   return db.transaction(async (tx) => {
     const [c] = await tx.select().from(serviceContracts).where(eq(serviceContracts.id, contractId)).for("update");
     if (!c) return { ok: false as const, error: "Contract not found" };
@@ -503,11 +550,23 @@ export async function claimContract(db: Db, contractId: string, executorId: stri
     }
     if (c.status !== "open") return { ok: false as const, error: `Contract is ${c.status.replace("_", " ")}` };
     if (c.expiresAt <= new Date()) return { ok: false as const, error: "Contract has expired" };
+    if (c.visibility === "classified" && !opts.acknowledgedClassified) {
+      return { ok: false as const, error: CLASSIFIED_ACK_REQUIRED };
+    }
 
     await tx
       .update(serviceContracts)
       .set({ executorId, status: "in_progress", claimedAt: new Date(), updatedAt: new Date() })
       .where(eq(serviceContracts.id, contractId));
+    if (c.visibility === "classified") {
+      // Timestamped, append-only: this is the record a breach claim is later judged against.
+      await tx.insert(contractEvents).values({
+        contractId,
+        actorId: executorId,
+        type: "classified_acknowledged",
+        data: {},
+      });
+    }
     await tx.insert(contractEvents).values({ contractId, actorId: executorId, type: "claimed", data: {} });
     return { ok: true as const };
   });
@@ -654,8 +713,116 @@ export async function expireServiceContracts(db: Db): Promise<number> {
 }
 
 /**
- * Contract standing — the same two-signal shape as trading standing, computed from an
- * entirely separate pool of work so the two reputations never bleed into each other.
+ * Report a breach of a classified contract's conditions of access.
+ *
+ * Only the issuer, only on a classified contract, and only against the executor who actually
+ * acknowledged the conditions — a claim needs the acknowledgement behind it to mean anything.
+ */
+export async function reportContractBreach(
+  db: Db,
+  opts: { contractId: string; reporterId: string; reason: string },
+): Promise<ServiceContractResult> {
+  return db.transaction(async (tx) => {
+    const [c] = await tx.select().from(serviceContracts).where(eq(serviceContracts.id, opts.contractId)).for("update");
+    if (!c) return { ok: false as const, error: "Contract not found" };
+    if (c.issuerId !== opts.reporterId) return { ok: false as const, error: "Only the issuer can report a breach" };
+    if (c.visibility !== "classified") {
+      return { ok: false as const, error: "Breaches apply to classified contracts only" };
+    }
+    if (!c.executorId) return { ok: false as const, error: "Nobody has taken this contract" };
+
+    const [existing] = await tx
+      .select()
+      .from(contractBreaches)
+      .where(eq(contractBreaches.contractId, c.id));
+    if (existing) return { ok: false as const, error: "A breach is already on record for this contract" };
+
+    await tx.insert(contractBreaches).values({
+      contractId: c.id,
+      accusedId: c.executorId,
+      reportedById: opts.reporterId,
+      reason: opts.reason,
+    });
+    await tx.insert(contractEvents).values({
+      contractId: c.id,
+      actorId: opts.reporterId,
+      type: "breach_reported",
+      data: {},
+    });
+    return { ok: true as const };
+  });
+}
+
+/** The accused's rebuttal. Doesn't hide the breach — marks it contested wherever it shows. */
+export async function disputeContractBreach(
+  db: Db,
+  opts: { contractId: string; userId: string; response: string },
+): Promise<ServiceContractResult> {
+  return db.transaction(async (tx) => {
+    const [b] = await tx
+      .select()
+      .from(contractBreaches)
+      .where(eq(contractBreaches.contractId, opts.contractId))
+      .for("update");
+    if (!b) return { ok: false as const, error: "No breach on record" };
+    if (b.accusedId !== opts.userId) return { ok: false as const, error: "Not your breach to dispute" };
+    if (b.status !== "reported") return { ok: false as const, error: `This breach is already ${b.status}` };
+
+    await tx
+      .update(contractBreaches)
+      .set({ status: "disputed", response: opts.response })
+      .where(eq(contractBreaches.id, b.id));
+    await tx.insert(contractEvents).values({
+      contractId: opts.contractId,
+      actorId: opts.userId,
+      type: "breach_disputed",
+      data: {},
+    });
+    return { ok: true as const };
+  });
+}
+
+/** Moderator ruling. Dismissing stops it counting; upholding settles it. */
+export async function resolveContractBreach(
+  db: Db,
+  opts: { contractId: string; moderatorId: string; action: "uphold" | "dismiss" },
+): Promise<ServiceContractResult> {
+  return db.transaction(async (tx) => {
+    const [b] = await tx
+      .select()
+      .from(contractBreaches)
+      .where(eq(contractBreaches.contractId, opts.contractId))
+      .for("update");
+    if (!b) return { ok: false as const, error: "No breach on record" };
+    if (b.status === "upheld" || b.status === "dismissed") {
+      return { ok: false as const, error: `Already ${b.status}` };
+    }
+
+    await tx
+      .update(contractBreaches)
+      .set({
+        status: opts.action === "uphold" ? "upheld" : "dismissed",
+        resolvedById: opts.moderatorId,
+        resolvedAt: new Date(),
+      })
+      .where(eq(contractBreaches.id, b.id));
+    await tx.insert(contractEvents).values({
+      contractId: opts.contractId,
+      actorId: opts.moderatorId,
+      type: opts.action === "uphold" ? "breach_upheld" : "breach_dismissed",
+      data: {},
+    });
+    return { ok: true as const };
+  });
+}
+
+/**
+ * Contract standing — three independent signals rather than one blended score.
+ *
+ * "9/10 met" is what happened, "★4.6" is how it felt, and a breach count is a different
+ * class of fact altogether: a rating says someone was slow, a breach says they couldn't be
+ * trusted with something confidential. Averaging that into stars would bury it, which is
+ * exactly what it must not do.
  */
 export type ContractStanding = {
   completed: number;
@@ -663,6 +830,10 @@ export type ContractStanding = {
   completionPct: number | null;
   stars: number | null;
   ratingCount: number;
+  /** Breaches on record and not dismissed. */
+  breaches: number;
+  /** How many of those the accused has contested. */
+  breachesDisputed: number;
 };
 
 export const EMPTY_CONTRACT_STANDING: ContractStanding = {
@@ -671,6 +842,8 @@ export const EMPTY_CONTRACT_STANDING: ContractStanding = {
   completionPct: null,
   stars: null,
   ratingCount: 0,
+  breaches: 0,
+  breachesDisputed: 0,
 };
 
 export async function contractStandingFor(db: Db, userIds: string[]): Promise<Map<string, ContractStanding>> {
@@ -679,12 +852,15 @@ export async function contractStandingFor(db: Db, userIds: string[]): Promise<Ma
 
   const res = await db.execute<{
     user_id: string; completed: number; undertaken: number; avg_stars: string | null; rating_count: number;
+    breaches: number; breaches_disputed: number;
   }>(sql`
     SELECT u.id::text AS user_id,
            coalesce(c.completed, 0)::int   AS completed,
            coalesce(c.undertaken, 0)::int  AS undertaken,
            r.avg_stars::text               AS avg_stars,
-           coalesce(r.rating_count, 0)::int AS rating_count
+           coalesce(r.rating_count, 0)::int AS rating_count,
+           coalesce(b.breaches, 0)::int     AS breaches,
+           coalesce(b.disputed, 0)::int     AS breaches_disputed
     FROM users u
     LEFT JOIN LATERAL (
       SELECT count(*) FILTER (WHERE sc.status = 'completed') AS completed,
@@ -696,6 +872,13 @@ export async function contractStandingFor(db: Db, userIds: string[]): Promise<Ma
       SELECT avg(stars)::numeric(3,2) AS avg_stars, count(*) AS rating_count
       FROM contract_ratings WHERE rated_id = u.id
     ) r ON true
+    LEFT JOIN LATERAL (
+      -- Dismissed breaches stop counting entirely; disputed ones still count but are
+      -- surfaced as contested rather than quietly folded in.
+      SELECT count(*) FILTER (WHERE cb.status <> 'dismissed') AS breaches,
+             count(*) FILTER (WHERE cb.status = 'disputed')   AS disputed
+      FROM contract_breaches cb WHERE cb.accused_id = u.id
+    ) b ON true
     WHERE u.id IN (${sql.join(unique.map((id) => sql`${id}::uuid`), sql`, `)})
   `);
 
@@ -708,6 +891,8 @@ export async function contractStandingFor(db: Db, userIds: string[]): Promise<Ma
         completionPct: r.undertaken > 0 ? Math.round((r.completed / r.undertaken) * 100) : null,
         stars: r.avg_stars != null ? Number(r.avg_stars) : null,
         ratingCount: r.rating_count,
+        breaches: r.breaches,
+        breachesDisputed: r.breaches_disputed,
       },
     ]),
   );
