@@ -40,7 +40,9 @@ RUN addgroup -S kcx && adduser -S kcx -G kcx
 # `output: "standalone"` emits a self-contained server plus only the node_modules it needs.
 COPY --from=build --chown=kcx:kcx /app/apps/web/.next/standalone ./
 COPY --from=build --chown=kcx:kcx /app/apps/web/.next/static ./apps/web/.next/static
-COPY --from=build --chown=kcx:kcx /app/apps/web/public ./apps/web/public
+# The bracket makes the source a glob: if public/ is ever absent the COPY resolves to
+# nothing instead of failing the build. Next only creates public/ when assets exist.
+COPY --from=build --chown=kcx:kcx /app/apps/web/publi[c] ./apps/web/public
 
 USER kcx
 EXPOSE 3000

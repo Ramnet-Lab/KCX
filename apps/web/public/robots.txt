@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+
+# Authed and transient surfaces — no value to a crawler, and /account is per-user.
+Disallow: /account
+Disallow: /signin
+Disallow: /api/
