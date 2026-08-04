@@ -15,10 +15,11 @@ type Props = {
   initialSeries: IndexSeries;
   initialLatest: IndexLatest[];
   wsUrl: string;
+  signedIn: boolean;
 };
 
 /** Owns the single socket.io subscription; children render its live state. */
-export function MarketDashboard({ initialEntries, initialSeries, initialLatest, wsUrl }: Props) {
+export function MarketDashboard({ initialEntries, initialSeries, initialLatest, wsUrl, signedIn }: Props) {
   const [entries, setEntries] = useState<TickerEntry[]>(initialEntries);
   const [indexLatest, setIndexLatest] = useState<IndexLatest[]>(initialLatest);
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
@@ -82,6 +83,7 @@ export function MarketDashboard({ initialEntries, initialSeries, initialLatest, 
         open={orderSeed !== null}
         seed={orderSeed ?? {}}
         entries={entries}
+        signedIn={signedIn}
         onClose={() => setOrderSeed(null)}
         onPlaced={() => router.refresh()}
       />

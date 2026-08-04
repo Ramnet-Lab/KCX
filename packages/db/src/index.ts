@@ -6,6 +6,7 @@ export * from "./queries/collateral";
 export * from "./queries/contracts";
 export * from "./queries/index-series";
 export * from "./queries/orders";
+export * from "./queries/reputation";
 export * from "./queries/ticker";
 export * from "./queries/trades-list";
 export * from "./schema/auth";

@@ -4,6 +4,7 @@ import type { OrderDto } from "@kcx/shared";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { OrderActions } from "@/components/order-actions";
+import { TraderStanding } from "@/components/trader-standing";
 import { useMarketFeed } from "@/lib/use-market-feed";
 
 const fmt = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 0 });
@@ -376,6 +377,16 @@ export function OrderBoard({
                             ✓
                           </span>
                         )}
+                        <div className="mt-0.5">
+                          <TraderStanding
+                            settled={o.ownerSettled}
+                            entered={o.ownerEntered}
+                            completionPct={o.ownerCompletionPct}
+                            stars={o.ownerStars}
+                            ratingCount={o.ownerRatingCount}
+                            compact
+                          />
+                        </div>
                         <div className="mt-0.5">
                           <OrderActions order={o} signedIn={signedIn} />
                         </div>

@@ -6,7 +6,8 @@ import { notFound } from "next/navigation";
 import { ReferenceChart, type CandlePoint } from "@/components/reference-chart";
 import { fmtAuec, fmtScu, timeAgo } from "@/lib/format";
 
-export const revalidate = 120;
+// Live market data: never prerender at build time, when the database is empty.
+export const dynamic = "force-dynamic";
 
 type Props = { params: Promise<{ slug: string }> };
 

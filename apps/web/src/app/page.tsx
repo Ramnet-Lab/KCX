@@ -1,8 +1,10 @@
 import { getDb, indexLatest, indexSeries, tickerEntries } from "@kcx/db";
 import type { IndexLatest, IndexSeries, TickerEntry } from "@kcx/shared";
 import { MarketDashboard } from "@/components/market-dashboard";
+import { currentUser } from "@/lib/session";
 
-export const revalidate = 60;
+// Live market data: never prerender at build time, when the database is empty.
+export const dynamic = "force-dynamic";
 
 export default async function Home() {
   let entries: TickerEntry[] = [];
@@ -16,6 +18,7 @@ export default async function Home() {
     console.error("[home] market queries failed:", err instanceof Error ? err.message : err);
   }
   const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? "http://localhost:4000";
+  const user = await currentUser();
 
   return (
     <>
@@ -26,7 +29,7 @@ export default async function Home() {
           Player order flow joins the tape when the board opens.
         </p>
       </div>
-      <MarketDashboard initialEntries={entries} initialSeries={series} initialLatest={latest} wsUrl={wsUrl} />
+      <MarketDashboard initialEntries={entries} initialSeries={series} initialLatest={latest} wsUrl={wsUrl} signedIn={!!user} />
     </>
   );
 }

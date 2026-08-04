@@ -1,8 +1,9 @@
-import { getDb, listContracts, listOrders, type ContractDto } from "@kcx/db";
+import { getDb, listContracts, listOrders, pendingRatings, type ContractDto } from "@kcx/db";
 import type { OrderDto } from "@kcx/shared";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ContractsPanel } from "@/components/contracts-panel";
+import { RateContracts, type PendingRating } from "@/components/rate-contract";
 import { OrderBoard } from "@/components/order-board";
 import { currentUser } from "@/lib/session";
 
@@ -17,12 +18,14 @@ export default async function OrdersPage() {
   const user = await currentUser();
   let orders: OrderDto[] = [];
   let contracts: ContractDto[] = [];
+  let toRate: PendingRating[] = [];
   try {
     const db = getDb();
     [orders, contracts] = await Promise.all([
       listOrders(db, { viewerId: user?.id ?? null, statuses: ["active"], limit: 500 }),
       user ? listContracts(db, user.id, true) : Promise.resolve([]),
     ]);
+    if (user) toRate = await pendingRatings(db, user.id);
   } catch (err) {
     console.error("[orders page]", err instanceof Error ? err.message : err);
   }
@@ -39,6 +42,7 @@ export default async function OrdersPage() {
         </p>
       </div>
 
+      <RateContracts pending={toRate} />
       <ContractsPanel contracts={contracts} wsUrl={wsUrl} userId={user?.id ?? null} />
 
       {orders.length === 0 ? (

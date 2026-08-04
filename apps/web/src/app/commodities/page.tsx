@@ -10,7 +10,8 @@ export const metadata: Metadata = {
   description: "Current Star Citizen commodity prices across all NPC trade terminals.",
 };
 
-export const revalidate = 120;
+// Live market data: never prerender at build time, when the database is empty.
+export const dynamic = "force-dynamic";
 
 /** Latest player mark per commodity (only where real prints back it). */
 async function loadMarks(): Promise<Map<number, number>> {

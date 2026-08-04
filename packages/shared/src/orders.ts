@@ -78,6 +78,12 @@ export type OrderDto = {
   ownerHandle: string;
   ownerDisplayName: string;
   ownerVerified: boolean;
+  /** Counterparty standing: completion record plus star average. */
+  ownerSettled: number;
+  ownerEntered: number;
+  ownerCompletionPct: number | null;
+  ownerStars: number | null;
+  ownerRatingCount: number;
   isMine: boolean;
   createdAt: string;
   bumpedAt: string;

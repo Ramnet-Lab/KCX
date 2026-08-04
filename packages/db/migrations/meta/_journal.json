@@ -8,6 +8,13 @@
       "when": 1785821126313,
       "tag": "0000_volatile_masked_marvel",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785824934667,
+      "tag": "0001_sticky_vulcan",
+      "breakpoints": true
     }
   ]
 }

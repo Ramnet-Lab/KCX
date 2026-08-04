@@ -6,10 +6,13 @@ import {
   index,
   integer,
   jsonb,
+  check,
   pgTable,
   primaryKey,
+  smallint,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 import { commodities, gameVersions, locations } from "./market";
@@ -281,4 +284,37 @@ export const tradePrints = pgTable(
     executedAt: timestamp("executed_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("prints_commodity_time").on(t.commodityId, t.executedAt).where(sql`NOT ${t.excluded}`)],
+);
+
+/**
+ * Counterparty star rating, 1–5, left after a contract settles.
+ *
+ * Deliberately paired with the objective completion record (settled ÷ entered, computed
+ * from `trades`): stars capture how someone was to deal with, the ratio captures whether
+ * they actually follow through. Either alone is gameable — a trader can be charming and
+ * unreliable, or reliable and abrasive.
+ */
+export const tradeRatings = pgTable(
+  "trade_ratings",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    tradeId: uuid("trade_id")
+      .notNull()
+      .references(() => trades.id),
+    raterId: uuid("rater_id")
+      .notNull()
+      .references(() => users.id),
+    ratedId: uuid("rated_id")
+      .notNull()
+      .references(() => users.id),
+    stars: smallint("stars").notNull(),
+    comment: text("comment"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // One rating per party per contract — no stacking votes on a single trade.
+    uniqueIndex("trade_ratings_once").on(t.tradeId, t.raterId),
+    index("trade_ratings_rated").on(t.ratedId),
+    check("trade_ratings_stars_range", sql`${t.stars} BETWEEN 1 AND 5`),
+  ],
 );

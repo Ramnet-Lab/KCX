@@ -1,5 +1,6 @@
 import type { OrderDto, OrderSide } from "@kcx/shared";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { EMPTY_RATING, ratingsFor } from "./reputation";
 import type { Db } from "../client";
 import { commodities, locations } from "../schema/market";
 import { orders, users } from "../schema/orders";
@@ -56,7 +57,12 @@ export async function listOrders(db: Db, opts: ListOrdersOptions = {}): Promise<
     .orderBy(desc(orders.bumpedAt))
     .limit(Math.min(opts.limit ?? 200, 500));
 
-  return rows.map((r) => ({
+  // One extra query for the whole page rather than a rating lookup per row.
+  const ratings = await ratingsFor(db, rows.map((r) => r.ownerId));
+
+  return rows.map((r) => {
+    const rating = ratings.get(r.ownerId) ?? EMPTY_RATING;
+    return {
     id: r.id,
     side: r.side,
     commodityId: r.commodityId,
@@ -75,11 +81,17 @@ export async function listOrders(db: Db, opts: ListOrdersOptions = {}): Promise<
     ownerHandle: r.ownerHandle,
     ownerDisplayName: r.ownerDisplayName,
     ownerVerified: r.ownerVerified,
+    ownerSettled: rating.settled,
+    ownerEntered: rating.entered,
+    ownerCompletionPct: rating.completionPct,
+    ownerStars: rating.stars,
+    ownerRatingCount: rating.ratingCount,
     isMine: opts.viewerId != null && r.ownerId === opts.viewerId,
     createdAt: r.createdAt.toISOString(),
     bumpedAt: r.bumpedAt.toISOString(),
     expiresAt: r.expiresAt.toISOString(),
-  }));
+    };
+  });
 }
 
 /** Best resting prices per commodity — the "player market" summary beside the NPC baseline. */

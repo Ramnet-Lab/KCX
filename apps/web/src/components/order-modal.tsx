@@ -20,6 +20,8 @@ type Props = {
   open: boolean;
   seed: OrderModalSeed;
   entries: TickerEntry[];
+  /** Null when signed out — the form is replaced by a sign-in prompt. */
+  signedIn: boolean;
   onClose: () => void;
   onPlaced?: () => void;
 };
@@ -32,7 +34,7 @@ const fmt = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 0 
  * Price policy: the NPC baseline is shown as CONTEXT only — any premium or discount is
  * accepted and submitted verbatim. Nothing here clamps, warns-blocking, or rejects a price.
  */
-export function OrderModal({ open, seed, entries, onClose, onPlaced }: Props) {
+export function OrderModal({ open, seed, entries, signedIn, onClose, onPlaced }: Props) {
   const [side, setSide] = useState<OrderSide>(seed.side ?? "buy");
   const [commodityId, setCommodityId] = useState<number | null>(seed.commodityId ?? null);
   const [pick, setPick] = useState("");
@@ -201,7 +203,24 @@ export function OrderModal({ open, seed, entries, onClose, onPlaced }: Props) {
           </button>
         </div>
 
-        {done ? (
+        {!signedIn ? (
+          // The API rejects unauthenticated orders anyway; showing the form first would
+          // just waste the trader's time filling it in.
+          <div className="p-6 text-center">
+            <p className="mb-1 text-sm text-ink">Sign in to place orders</p>
+            <p className="mb-4 text-xs text-ink-dim">
+              Orders are backed by your declared holdings and balance, and settle between two
+              named traders — so KCX needs to know who you are before you can post one.
+            </p>
+            <a
+              href="/signin"
+              className="inline-block rounded border border-accent/60 px-4 py-2 text-sm font-bold text-accent hover:bg-accent/10"
+            >
+              Sign in
+            </a>
+            <p className="mt-3 text-[11px] text-ink-faint">Browsing prices needs no account.</p>
+          </div>
+        ) : done ? (
           <div className="p-8 text-center">
             <div className="mb-1 text-2xl text-up">✓</div>
             <p className="text-sm text-ink">Order posted to the board.</p>
