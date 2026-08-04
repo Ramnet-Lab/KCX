@@ -1,5 +1,7 @@
 "use client";
 
+import { WS_PATH } from "@kcx/shared";
+
 /**
  * Resolve the realtime endpoint from the browser's own location.
  *
@@ -13,21 +15,16 @@
  */
 export type WsTarget = { url: string; path: string };
 
-/** socket.io's default; used when the browser reaches the worker directly. */
-const DEFAULT_PATH = "/socket.io";
-/** Behind Caddy the worker is mounted at /ws, which strips the prefix before proxying. */
-const PROXY_PATH = "/ws/socket.io";
-
 export function resolveWsTarget(): WsTarget {
-  if (typeof window === "undefined") return { url: "http://localhost:4000", path: DEFAULT_PATH };
+  if (typeof window === "undefined") return { url: "http://localhost:4000", path: WS_PATH };
 
   const { protocol, hostname, port, origin } = window.location;
 
   // The Next dev server runs on 3000/3001 with the worker beside it on 4000, unproxied.
   if (port === "3000" || port === "3001") {
-    return { url: `${protocol}//${hostname}:4000`, path: DEFAULT_PATH };
+    return { url: `${protocol}//${hostname}:4000`, path: WS_PATH };
   }
 
-  // Anything else is a reverse proxy: same origin, socket under /ws.
-  return { url: origin, path: PROXY_PATH };
+  // Anything else is behind a reverse proxy or tunnel: same origin, same path.
+  return { url: origin, path: WS_PATH };
 }

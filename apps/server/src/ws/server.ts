@@ -1,5 +1,11 @@
 import { createServer, type Server as HttpServer } from "node:http";
-import { WS_ROOMS, type ClientToServerEvents, type ServerToClientEvents, type TickerUpdate } from "@kcx/shared";
+import {
+  WS_PATH,
+  WS_ROOMS,
+  type ClientToServerEvents,
+  type ServerToClientEvents,
+  type TickerUpdate,
+} from "@kcx/shared";
 import { Server } from "socket.io";
 
 export type Ws = {
@@ -24,6 +30,9 @@ export function createWsServer(port: number, corsOrigins: string[]): Ws {
   const io = new Server<ClientToServerEvents, ServerToClientEvents>(http, {
     cors: { origin: corsOrigins },
     serveClient: false,
+    // One path in every environment, so no proxy has to rewrite anything: Caddy, a
+    // Cloudflare Tunnel, or a direct connection to :4000 all forward it unchanged.
+    path: WS_PATH,
   });
 
   io.on("connection", (socket) => {

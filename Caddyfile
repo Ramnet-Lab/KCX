@@ -6,8 +6,9 @@
 
 	# socket.io lives in the worker process. Long-lived upgrades need a generous timeout —
 	# the default would sever idle market feeds.
+	# No strip_prefix: the worker serves /ws/socket.io itself, so this forwards verbatim
+	# and the same client works through any proxy (or none).
 	handle /ws/* {
-		uri strip_prefix /ws
 		reverse_proxy server:4000 {
 			transport http {
 				read_timeout 24h

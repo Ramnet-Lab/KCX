@@ -77,6 +77,12 @@ export type ClientToServerEvents = {
   identify: (userId: string) => void;
 };
 
+/**
+ * socket.io endpoint path. Identical on both ends and in every environment so that no
+ * reverse proxy needs a rewrite rule — forwarding it verbatim is always correct.
+ */
+export const WS_PATH = "/ws/socket.io";
+
 /** Room names — single source of truth. */
 export const WS_ROOMS = {
   ticker: "ticker",
