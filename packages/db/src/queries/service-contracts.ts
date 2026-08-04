@@ -3,22 +3,29 @@ import type { Db } from "../client";
 import { contractBids, contractEvents, contractRatings, serviceContracts } from "../schema/contracts";
 import { users } from "../schema/orders";
 
+/**
+ * A contract as sent to one particular viewer.
+ *
+ * Most fields are nullable because a classified contract is redacted down to its TITLE for
+ * anyone who hasn't taken it. The nulls are the redaction — there is no second, fuller
+ * object behind this one.
+ */
 export type ServiceContractDto = {
   id: string;
   title: string;
   description: string | null;
-  category: string;
+  category: string | null;
   /** Fixed price, or the ceiling in bid mode. */
-  payout: number;
+  payout: number | null;
   status: string;
   locationName: string | null;
   imageFilename: string | null;
-  issuerId: string;
-  issuerName: string;
+  issuerId: string | null;
+  issuerName: string | null;
   executorId: string | null;
   executorName: string | null;
-  expiresAt: string;
-  createdAt: string;
+  expiresAt: string | null;
+  createdAt: string | null;
   issuerConfirmed: boolean;
   executorConfirmed: boolean;
   /** Viewer-relative flags so the UI needn't re-derive them. */
@@ -52,7 +59,7 @@ export type ServiceContractListOptions = {
 };
 
 /**
- * Whether a viewer may see a classified contract's description, image and location.
+ * Whether a viewer may see anything about a classified contract beyond its title.
  *
  * Deliberately NOT granted to the awarded bidder: the whole point of a classified posting
  * is that details land only once someone has committed to the job, so the reveal happens on
@@ -121,24 +128,70 @@ export async function listContractsBoard(db: Db, opts: ServiceContractListOption
   return rows.rows.map((r) => {
     const isIssuer = viewer != null && r.issuer_id === viewer;
     const isExecutor = viewer != null && r.executor_id === viewer;
-    // Redaction happens HERE, on the way out of the database — a classified contract's
-    // description, image and location are never serialised for anyone else, so there is no
-    // hidden copy sitting in a payload for the UI to be trusted not to render.
+    // Redaction happens HERE, on the way out of the database, so there is no hidden copy
+    // sitting in a payload for the UI to be trusted not to render.
     const canSee = canSeeContractDetails(
       { visibility: r.visibility, issuerId: r.issuer_id, executorId: r.executor_id },
       viewer,
       opts.viewerRole,
     );
 
+    if (!canSee) {
+      // A classified contract is its TITLE and nothing else. What survives below is only
+      // what the board physically cannot work without: the id to act on, the status and
+      // pricing mode to know which button to draw, and the viewer's own bid. Every field
+      // that says anything about the job, the money or the people is gone.
+      return {
+        id: r.id,
+        title: r.title,
+        description: null,
+        category: null,
+        payout: null,
+        status: r.status,
+        locationName: null,
+        imageFilename: null,
+        issuerId: null,
+        issuerName: null,
+        executorId: null,
+        executorName: null,
+        expiresAt: null,
+        // Board order is decided in SQL, so the client never needs this — and when it was
+        // posted is one more fact about the contract.
+        createdAt: null,
+        issuerConfirmed: false,
+        executorConfirmed: false,
+        isIssuer: false,
+        isExecutor: false,
+        pricingMode: r.pricing_mode,
+        visibility: r.visibility,
+        redacted: true,
+        // Auction deadlines stay: without them nobody can tell whether there is still time
+        // to bid, and they describe the listing's clock rather than the work itself.
+        bidsCloseAt: r.bids_close_at ? new Date(r.bids_close_at).toISOString() : null,
+        awardResponseHours: null,
+        awardedToId: null,
+        awardedToName: null,
+        awardedAmount: null,
+        awardExpiresAt: r.award_expires_at ? new Date(r.award_expires_at).toISOString() : null,
+        bidCount: 0,
+        // Their own bid is theirs to see — it is not a fact about the contract.
+        myBid:
+          r.my_bid_amount != null
+            ? { amount: Number(r.my_bid_amount), status: r.my_bid_status!, note: r.my_bid_note }
+            : null,
+        isAwardee: viewer != null && r.awarded_to_id === viewer,
+      };
+    }
+
     return {
       id: r.id,
       title: r.title,
-      description: canSee ? r.description : null,
+      description: r.description,
       category: r.category,
       payout: Number(r.payout),
       status: r.status,
-      locationName: canSee ? r.location_name : null,
-      imageFilename: canSee ? r.image_filename : null,
+      locationName: r.location_name,
+      imageFilename: r.image_filename,
       issuerId: r.issuer_id,
       issuerName: r.issuer_name,
       executorId: r.executor_id,
@@ -151,7 +204,7 @@ export async function listContractsBoard(db: Db, opts: ServiceContractListOption
       isExecutor,
       pricingMode: r.pricing_mode,
       visibility: r.visibility,
-      redacted: !canSee,
+      redacted: false,
       bidsCloseAt: r.bids_close_at ? new Date(r.bids_close_at).toISOString() : null,
       awardResponseHours: r.award_response_hours,
       awardedToId: r.awarded_to_id,
@@ -279,9 +332,14 @@ export async function placeBid(
     if (c.status !== "bidding") return { ok: false as const, error: `Bidding is ${c.status === "open" ? "not open" : "closed"}` };
     if (c.bidsCloseAt && c.bidsCloseAt <= new Date()) return { ok: false as const, error: "Bidding has closed" };
     if (opts.amount > c.payout) {
+      // On a classified contract the ceiling is itself redacted, so the rejection must not
+      // quote it — otherwise anyone could binary-search the budget from error messages.
       return {
         ok: false as const,
-        error: `Bid of ${opts.amount.toLocaleString()} aUEC is above the ${c.payout.toLocaleString()} ceiling.`,
+        error:
+          c.visibility === "classified"
+            ? "That bid is above what the issuer is willing to pay. The ceiling is not disclosed on a classified contract."
+            : `Bid of ${opts.amount.toLocaleString()} aUEC is above the ${c.payout.toLocaleString()} ceiling.`,
       };
     }
 

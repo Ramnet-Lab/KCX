@@ -178,9 +178,11 @@ export function ContractBoard({
           {visible.map((c) => (
             <article key={c.id} className={`rounded border p-3 ${c.isIssuer || c.isExecutor ? "border-accent/40" : "border-line"} bg-panel`}>
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                <span className="rounded bg-panel-2 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-ink-dim">
-                  {c.category}
-                </span>
+                {c.category && (
+                  <span className="rounded bg-panel-2 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-ink-dim">
+                    {c.category}
+                  </span>
+                )}
                 {c.visibility === "classified" && (
                   <span
                     className="rounded bg-danger/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-danger"
@@ -196,28 +198,32 @@ export function ContractBoard({
                 )}
                 <h3 className="text-sm font-bold text-ink">{c.title}</h3>
                 <span className="num ml-auto text-right text-sm font-bold text-up">
-                  {c.awardedAmount != null ? (
+                  {c.redacted ? (
+                    <span className="text-ink-faint">▩▩▩ aUEC</span>
+                  ) : c.awardedAmount != null ? (
                     <>
                       {fmt(c.awardedAmount)} aUEC
                       <span className="block text-[10px] font-normal text-ink-faint">
-                        won at · budget {fmt(c.payout)}
+                        won at · budget {fmt(c.payout ?? 0)}
                       </span>
                     </>
                   ) : c.pricingMode === "bid" ? (
                     <>
-                      ≤ {fmt(c.payout)} aUEC
+                      ≤ {fmt(c.payout ?? 0)} aUEC
                       <span className="block text-[10px] font-normal text-ink-faint">budget ceiling</span>
                     </>
                   ) : (
-                    <>{fmt(c.payout)} aUEC</>
+                    <>{fmt(c.payout ?? 0)} aUEC</>
                   )}
                 </span>
               </div>
 
               {c.redacted && (
                 <p className="mt-2 rounded border border-dashed border-danger/40 bg-danger/5 px-3 py-2 text-xs text-ink-faint">
-                  <span className="font-bold text-danger">Details withheld.</span> The brief, any
-                  image and the location are released only to whoever takes this contract.
+                  <span className="font-bold text-danger">Classified.</span> Everything except the
+                  title is withheld — the brief, the payout, the deadline, the location, any image
+                  and who posted it. All of it is released the moment you take this contract, and
+                  not before.
                 </p>
               )}
 
@@ -242,19 +248,23 @@ export function ContractBoard({
               )}
 
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-faint">
-                <span>
-                  posted by <span className="text-ink-dim">{c.issuerName}</span>
-                </span>
+                {c.issuerName ? (
+                  <span>
+                    posted by <span className="text-ink-dim">{c.issuerName}</span>
+                  </span>
+                ) : (
+                  <span className="text-ink-faint">issuer withheld</span>
+                )}
                 {c.executorName && (
                   <span>
                     taken by <span className="text-ink-dim">{c.executorName}</span>
                   </span>
                 )}
-                <span suppressHydrationWarning>{timeLeft(c.expiresAt)}</span>
+                {c.expiresAt && <span suppressHydrationWarning>{timeLeft(c.expiresAt)}</span>}
                 {c.status === "bidding" && c.bidsCloseAt && (
                   <span className="text-accent" suppressHydrationWarning>
-                    bidding closes in {countdown(c.bidsCloseAt)} · {c.bidCount}{" "}
-                    {c.bidCount === 1 ? "bid" : "bids"} (sealed)
+                    bidding closes in {countdown(c.bidsCloseAt)}
+                    {!c.redacted && ` · ${c.bidCount} ${c.bidCount === 1 ? "bid" : "bids"} (sealed)`}
                   </span>
                 )}
                 {c.status === "awarded" && (
@@ -292,7 +302,7 @@ export function ContractBoard({
                 <p className="mt-2 rounded border border-line bg-panel-2 px-3 py-2 text-[11px] text-ink-faint">
                   Bids are sealed — you'll see the winning number when the window closes, not
                   before. The lowest bid wins automatically; ties go to whoever bid first. Your
-                  full {fmt(c.payout)} aUEC ceiling stays committed until then.
+                  full {fmt(c.payout ?? 0)} aUEC ceiling stays committed until then.
                 </p>
               )}
 
@@ -474,13 +484,15 @@ function BidPanel({
         <div className="mt-2 flex flex-wrap items-end gap-2">
           <label className="flex-1">
             <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">
-              Your price (aUEC) — must be at or under {fmt(contract.payout)}
+              {contract.payout != null
+                ? `Your price (aUEC) — must be at or under ${fmt(contract.payout)}`
+                : "Your price (aUEC) — the ceiling is not disclosed"}
             </span>
             <input
               type="number"
               inputMode="numeric"
               min={1}
-              max={contract.payout}
+              max={contract.payout ?? undefined}
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
               placeholder="0"
@@ -500,6 +512,7 @@ function BidPanel({
       <p className="mt-1 text-[11px] text-ink-faint">
         Sealed bidding — nobody sees your number, and you can't see theirs. Lowest bid wins when
         the window closes.
+        {contract.redacted && " This contract is classified: you're bidding on the title alone."}
       </p>
     </div>
   );
@@ -751,18 +764,20 @@ function ComposeContract({ onPosted }: { onPosted: () => void }) {
               className="mt-0.5 h-4 w-4 accent-[#e8b449]"
             />
             <span className="text-xs">
-              <span className="font-bold text-ink">Classified — hide the details until someone takes it</span>
+              <span className="font-bold text-ink">Classified — nothing but the title until someone takes it</span>
               <span className="mt-1 block text-[11px] text-ink-faint">
-                The brief, the image and the location stay hidden from the board and are
-                released only to whoever accepts. Everyone can still see the title, category
-                and payout — that's how people decide whether to take it.
+                The brief, the payout, the deadline, the location, the image and your own name
+                are all withheld from the board. Everything is released the moment someone
+                takes the contract.
               </span>
             </span>
           </label>
           {classified && (
             <p className="mt-2 rounded bg-danger/10 px-2 py-1.5 text-[11px] text-danger">
-              Your title stays public. Keep the target's name out of it — put that in the
-              details below, which is what gets withheld.
+              The title is the only thing anyone sees — keep the target out of it, and make it
+              enough for someone to say yes to.
+              {pricingMode === "bid" &&
+                " Bidders won't see your ceiling either, so they'll be pricing the title alone."}
             </p>
           )}
         </div>
