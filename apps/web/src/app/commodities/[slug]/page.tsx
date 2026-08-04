@@ -4,6 +4,7 @@ import {
   commodityTape,
   BULK_SCU_THRESHOLD,
   getDb,
+  listMakerQuotes,
   listWatchlist,
   locations,
   MARK_CONFIDENT_PAIRS,
@@ -18,6 +19,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ReferenceChart, type CandlePoint } from "@/components/reference-chart";
+import { MarketMakerPanel } from "@/components/market-makers";
 import { TapePanel } from "@/components/tape-panel";
 import { WatchButton } from "@/components/watchlist";
 import { fmtAuec, fmtScu, timeAgo } from "@/lib/format";
@@ -86,6 +88,11 @@ export default async function CommodityPage({ params }: Props) {
   const watching = viewer
     ? ((await listWatchlist(db, viewer.id)).find((w) => w.commodityId === commodity!.id) ?? null)
     : null;
+  const makerQuotes = await listMakerQuotes(db, {
+    commodityId: commodity.id,
+    viewerId: viewer?.id ?? null,
+    includeInactive: true,
+  }).catch(() => []);
 
   const loadCandles = async (period: "1h" | "1d", limit: number): Promise<CandlePoint[]> => {
     const rows = await db
@@ -334,6 +341,15 @@ export default async function CommodityPage({ params }: Props) {
         candles1d={candles1d}
         wsUrl={wsUrl}
       />
+      <MarketMakerPanel
+        commodityId={commodity.id}
+        commodityName={commodity.name}
+        quotes={makerQuotes}
+        signedIn={!!viewer}
+        verified={!!viewer?.isVerified}
+        markPrice={markPrice}
+      />
+
       <TapePanel commodityId={commodity.id} initial={tape} wsUrl={wsUrl} />
       <div className="grid gap-6 lg:grid-cols-2">
         <section>

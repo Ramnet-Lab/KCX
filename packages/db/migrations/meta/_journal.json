@@ -127,6 +127,13 @@
       "when": 1785878671782,
       "tag": "0017_orgs",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1785879151005,
+      "tag": "0018_market_makers",
+      "breakpoints": true
     }
   ]
 }

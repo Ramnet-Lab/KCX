@@ -31,6 +31,7 @@ export default defineConfig({
     "./src/schema/auth.ts",
     "./src/schema/contracts.ts",
     "./src/schema/orgs.ts",
+    "./src/schema/market-makers.ts",
     "./src/schema/bazaar.ts",
     "./src/schema/watchlist.ts",
     "./src/schema/moderation.ts",

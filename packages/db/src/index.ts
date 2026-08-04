@@ -27,5 +27,7 @@ export * from "./schema/orders";
 export * from "./schema/snapshots";
 export * from "./schema/watchlist";
 export * from "./schema/orgs";
+export * from "./schema/market-makers";
 export * from "./queries/watchlist";
 export * from "./queries/orgs";
+export * from "./queries/market-makers";

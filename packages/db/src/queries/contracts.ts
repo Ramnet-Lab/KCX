@@ -10,6 +10,7 @@ import {
   users,
 } from "../schema/orders";
 import type { PrintExclusion } from "../schema/orders";
+import { marketMakerQuotes } from "../schema/market-makers";
 import { MAX_OPEN_ESCROWS, committedAuecSql, committedScuSql } from "./collateral";
 import { refreshCommodityMark } from "./market-point";
 import { judgePrint } from "./print-integrity";
@@ -338,6 +339,32 @@ export async function resolveContract(
       exclusionReason: verdict.reason,
       executedAt: now,
     });
+
+    /*
+     * Credit either party for honouring a standing quote.
+     *
+     * Uptime says a maker was there; this says they actually dealt when someone turned up,
+     * which is the claim that matters and the one a quote left up unattended cannot fake.
+     * Applied to both sides because either can be the maker — the person who posted the
+     * order isn't necessarily the one quoting the market.
+     */
+    for (const party of [cargoTo, cargoFrom]) {
+      if (!party) continue;
+      await tx
+        .update(marketMakerQuotes)
+        .set({
+          fillsHonoured: sql`${marketMakerQuotes.fillsHonoured} + 1`,
+          scuHonoured: sql`${marketMakerQuotes.scuHonoured} + ${trade.quantityScu}`,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(marketMakerQuotes.userId, party),
+            eq(marketMakerQuotes.commodityId, trade.commodityId),
+            eq(marketMakerQuotes.status, "active"),
+          ),
+        );
+    }
 
     const [order] = await tx.select().from(orders).where(eq(orders.id, trade.orderId)).for("update");
     const remaining = Math.max(0, (order?.remainingScu ?? 0) - trade.quantityScu);
