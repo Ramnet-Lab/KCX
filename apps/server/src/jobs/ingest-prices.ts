@@ -5,6 +5,7 @@ import { audit, fetchUexRows, int, num, parseRows } from "../lib/uex";
 import { rebuildCandlesSince } from "./candles";
 import { rebuildIndexSince } from "./index-points";
 import { ensureSnapshotInfra } from "./partitions";
+import { syncMasterData } from "./sync-master";
 
 /**
  * The 30-minute poll: /commodities_prices_all → (in ONE transaction, serialized by an
@@ -26,6 +27,16 @@ export async function ingestPrices(): Promise<{ upserted: number; snapshotted: n
 
     const raw = await fetchUexRows("/commodities_prices_all");
     const rows = parseRows(raw, uexPriceRow, "prices");
+
+    // Prices reference commodities and terminals by id, so master data has to exist first.
+    // On a fresh database it doesn't — and the master sync is only scheduled daily, which
+    // would leave a new deployment with an empty board until 03:00. Bootstrap it here so
+    // the job is self-sufficient no matter what triggered it.
+    const masterProbe = await db.execute<{ n: string }>(sql`SELECT count(*)::text AS n FROM commodities`);
+    if (Number(masterProbe.rows[0]?.n ?? 0) === 0) {
+      console.log("[ingest] no master data yet — syncing commodities and terminals first");
+      await syncMasterData();
+    }
 
     const [commodityRows, terminalRows] = await Promise.all([
       db.select({ id: commodities.id, uexId: commodities.uexId }).from(commodities),
