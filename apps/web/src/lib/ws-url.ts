@@ -3,19 +3,31 @@
 /**
  * Resolve the realtime endpoint from the browser's own location.
  *
- * A build-time constant can't work here: the same bundle is loaded from localhost, from a LAN
- * address, and (later) from the public domain. Deriving the host at runtime means a phone on
- * the LAN connects back to this machine rather than to itself.
+ * Deliberately NOT from NEXT_PUBLIC_WS_URL. Next inlines `process.env.NEXT_PUBLIC_*` at
+ * BUILD time, so a value supplied by the container at runtime never reaches the bundle —
+ * the compiled-in fallback ships instead, and every production browser tries to open a
+ * socket against itself on :4000.
  *
- * NEXT_PUBLIC_WS_URL still wins when set, for deployments where the socket lives elsewhere.
+ * Deriving it from `window.location` also means one image works from localhost, a LAN
+ * address, and the public domain with no rebuild.
  */
-export function resolveWsUrl(configured?: string | null): string {
-  if (configured) return configured;
-  if (typeof window === "undefined") return "http://localhost:4000";
+export type WsTarget = { url: string; path: string };
 
-  const { protocol, hostname, port } = window.location;
-  // Behind a reverse proxy in production the socket shares the page's origin (Caddy routes
-  // /ws), so only fall back to the dev port when we're clearly on the Next dev server.
-  const isDevPort = port === "3000" || port === "3001";
-  return isDevPort ? `${protocol}//${hostname}:4000` : window.location.origin;
+/** socket.io's default; used when the browser reaches the worker directly. */
+const DEFAULT_PATH = "/socket.io";
+/** Behind Caddy the worker is mounted at /ws, which strips the prefix before proxying. */
+const PROXY_PATH = "/ws/socket.io";
+
+export function resolveWsTarget(): WsTarget {
+  if (typeof window === "undefined") return { url: "http://localhost:4000", path: DEFAULT_PATH };
+
+  const { protocol, hostname, port, origin } = window.location;
+
+  // The Next dev server runs on 3000/3001 with the worker beside it on 4000, unproxied.
+  if (port === "3000" || port === "3001") {
+    return { url: `${protocol}//${hostname}:4000`, path: DEFAULT_PATH };
+  }
+
+  // Anything else is a reverse proxy: same origin, socket under /ws.
+  return { url: origin, path: PROXY_PATH };
 }

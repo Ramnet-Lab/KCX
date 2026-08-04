@@ -89,7 +89,7 @@ export function ContractsPanel({
               <span className={`num ${c.iDeliverCargo ? "text-up" : "text-down"}`}>
                 {c.iDeliverCargo ? `+${fmt(c.value)} aUEC to you` : `−${fmt(c.value)} aUEC from you`}
               </span>
-              <span className="ml-auto text-xs text-ink-faint">{timeLeft(c.expiresAt)}</span>
+              <span suppressHydrationWarning className="ml-auto text-xs text-ink-faint">{timeLeft(c.expiresAt)}</span>
             </div>
 
             <div className="mt-1 text-xs text-ink-dim">

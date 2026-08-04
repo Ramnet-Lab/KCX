@@ -17,7 +17,7 @@ import {
   type SectorCode,
   type TickerEntry,
 } from "@kcx/shared";
-import { localTickMarkFormatter, localTimeFormatter, localZoneLabel } from "@/lib/chart-time";
+import { localTickMarkFormatter, localTimeFormatter, useLocalZoneLabel } from "@/lib/chart-time";
 import { loadPortfolio, savePortfolio, type Portfolio } from "@/lib/portfolio";
 
 export type PlaceOrderSeed = {
@@ -42,6 +42,7 @@ const fmtAuec = (v: number) => v.toLocaleString("en-US", { maximumFractionDigits
 /** Top-of-page panel: sector index chart (market tab) + portfolio valuation tab. */
 export function IndexPanel({ series, latest, latestAt, entries, onPlaceOrder }: Props) {
   const [tab, setTab] = useState<"market" | "portfolio">("market");
+  const zoneLabel = useLocalZoneLabel();
   const [sector, setSector] = useState<SectorCode>(COMPOSITE_SECTOR);
 
   const latestBySector = useMemo(() => new Map(latest.map((l) => [l.sector, l])), [latest]);
@@ -98,7 +99,7 @@ export function IndexPanel({ series, latest, latestAt, entries, onPlaceOrder }: 
           <IndexChart points={points} latest={latestBySector.get(sector) ?? null} latestAt={latestAt} />
           <p className="mt-2 text-[11px] leading-relaxed text-ink-faint">
             Base-1000, equal-weight vs each commodity&apos;s first-seen baseline, tracking the KCX
-            mark — so player fills move it, not just NPC prices. Times shown in {localZoneLabel()}.
+            mark — so player fills move it, not just NPC prices.{zoneLabel && ` Times shown in ${zoneLabel}.`}
           </p>
         </div>
       ) : (

@@ -8,7 +8,7 @@ import { IndexPanel } from "@/components/index-panel";
 import { OrderModal, type OrderModalSeed } from "@/components/order-modal";
 import { TickerWall } from "@/components/ticker-wall";
 import { loadPortfolio, recordPortfolioHistoryPoint } from "@/lib/portfolio";
-import { resolveWsUrl } from "@/lib/ws-url";
+import { resolveWsTarget } from "@/lib/ws-url";
 
 type Props = {
   initialEntries: TickerEntry[];
@@ -30,7 +30,8 @@ export function MarketDashboard({ initialEntries, initialSeries, initialLatest, 
   const openOrder = useCallback((seed: OrderModalSeed) => setOrderSeed(seed), []);
 
   useEffect(() => {
-    const socket = io(resolveWsUrl(wsUrl), { transports: ["websocket", "polling"] });
+    const target = resolveWsTarget();
+    const socket = io(target.url, { path: target.path, transports: ["websocket", "polling"] });
     socketRef.current = socket;
     socket.on("ticker:update", (payload: TickerUpdate) => {
       setEntries(payload.entries);

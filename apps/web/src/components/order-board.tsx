@@ -368,7 +368,7 @@ export function OrderBoard({
                         {o.minFillScu > 1 && <span className="text-ink-faint"> · min {fmt(o.minFillScu)}</span>}
                       </td>
                       <td className="num px-3 py-1.5 text-right text-ink">{fmt(o.pricePerScu * avail)}</td>
-                      <td className="num px-3 py-1.5 text-right text-ink-faint">{timeLeft(o.expiresAt)}</td>
+                      <td suppressHydrationWarning className="num px-3 py-1.5 text-right text-ink-faint">{timeLeft(o.expiresAt)}</td>
                       <td className="px-3 py-1.5 text-ink-dim">
                         {o.ownerDisplayName}
                         {o.ownerVerified && (

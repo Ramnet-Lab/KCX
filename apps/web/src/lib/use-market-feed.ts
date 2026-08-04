@@ -3,7 +3,7 @@
 import type { MarketUpdate } from "@kcx/shared";
 import { useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
-import { resolveWsUrl } from "./ws-url";
+import { resolveWsTarget } from "./ws-url";
 
 /**
  * Shared connection to the live market feed.
@@ -17,10 +17,10 @@ import { resolveWsUrl } from "./ws-url";
 type Parked = { url: string; socket: Socket; userId?: string | null };
 const KEY = "__kcxMarketFeed";
 
-function getSocket(wsUrl: string, userId?: string | null): Socket {
+function getSocket(target: { url: string; path: string }, userId?: string | null): Socket {
   const w = window as unknown as Record<string, Parked | undefined>;
   const existing = w[KEY];
-  if (existing && existing.url === wsUrl) {
+  if (existing && existing.url === target.url) {
     if (userId && existing.userId !== userId) {
       existing.socket.emit("identify", userId);
       existing.userId = userId;
@@ -28,13 +28,13 @@ function getSocket(wsUrl: string, userId?: string | null): Socket {
     return existing.socket;
   }
   existing?.socket.disconnect();
-  const socket = io(wsUrl, { transports: ["websocket", "polling"] });
+  const socket = io(target.url, { path: target.path, transports: ["websocket", "polling"] });
   const identify = () => {
     if (userId) socket.emit("identify", userId);
   };
   identify();
   socket.on("connect", identify);
-  w[KEY] = { url: wsUrl, socket, userId };
+  w[KEY] = { url: target.url, socket, userId };
   return socket;
 }
 
@@ -53,8 +53,8 @@ export function useMarketFeed(
   handler.current = onChange;
 
   useEffect(() => {
-    const wsUrl = resolveWsUrl(configuredWsUrl);
-    const socket = getSocket(wsUrl, userId);
+    const target = resolveWsTarget();
+    const socket = getSocket(target, userId);
     let timer: ReturnType<typeof setTimeout> | null = null;
     let pending: MarketUpdate | null = null;
     let sawFirstConnect = socket.connected;

@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 import { TickMarkType, type Time } from "lightweight-charts";
 
 /**
@@ -54,7 +56,13 @@ export function utcDateFormatter(time: Time): string {
   })} (UTC day)`;
 }
 
-/** Short label naming the timezone the axis is currently showing. */
+/**
+ * Short label naming the timezone the axis is currently showing.
+ *
+ * ⚠ Client-only: the server renders in the container's zone (UTC) and the browser in the
+ * viewer's, so calling this during render produces a hydration mismatch (React #418).
+ * Read it through `useLocalZoneLabel()` instead of calling it inline in JSX.
+ */
 export function localZoneLabel(): string {
   try {
     const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" }).formatToParts(new Date());
@@ -62,4 +70,14 @@ export function localZoneLabel(): string {
   } catch {
     return "local";
   }
+}
+
+/**
+ * Timezone label that is safe to render: empty on the server and on the first client
+ * paint, filled in immediately after mount. Both passes agree, so hydration succeeds.
+ */
+export function useLocalZoneLabel(): string {
+  const [zone, setZone] = useState("");
+  useEffect(() => setZone(localZoneLabel()), []);
+  return zone;
 }

@@ -12,7 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   localTickMarkFormatter,
   localTimeFormatter,
-  localZoneLabel,
+  useLocalZoneLabel,
   utcDateFormatter,
   utcDateTickMarkFormatter,
 } from "@/lib/chart-time";
@@ -41,6 +41,7 @@ type Props = {
  */
 export function ReferenceChart({ candles1h, candles1d }: Props) {
   const [period, setPeriod] = useState<"1h" | "1d">("1h");
+  const zoneLabel = useLocalZoneLabel();
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
 
@@ -146,7 +147,7 @@ export function ReferenceChart({ candles1h, candles1d }: Props) {
           <span className="text-accent">cheapest buy-from</span>
         </span>
         <span className="ml-auto text-[10px] text-ink-faint">
-          {period === "1h" ? `times in ${localZoneLabel()}` : "UTC days"}
+          {period === "1h" ? (zoneLabel ? `times in ${zoneLabel}` : "") : "UTC days"}
         </span>
         <div className="flex gap-1">
           {(["1h", "1d"] as const).map((p) => (
