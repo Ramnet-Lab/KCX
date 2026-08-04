@@ -8,6 +8,8 @@ loadRootEnv();
 import {
   closeDb,
   expireStaleContracts,
+  closeContractBidding,
+  expireContractAwards,
   expireServiceContracts,
   runMigrations,
   expireUnfilledOrders,
@@ -98,6 +100,12 @@ async function main() {
     // Self-heal any reserved_scu drift before deciding what has actually run out of time.
     const reconciled = await reconcileReservations(db);
     if (reconciled > 0) console.log(`[contracts] reconciled reserved_scu on ${reconciled} order(s)`);
+    // Auctions resolve before deadlines are enforced: a contract whose bidding window just
+    // closed should get its winner in the same sweep, not be expired out from under them.
+    const auctions = await closeContractBidding(db);
+    if (auctions > 0) console.log(`[contracts] ${auctions} auction(s) closed → awarded to lowest bidder`);
+    const lapsed = await expireContractAwards(db);
+    if (lapsed > 0) console.log(`[contracts] ${lapsed} award(s) went unanswered → cascaded to next bidder`);
     const jobs = await expireServiceContracts(db);
     if (jobs > 0) console.log(`[contracts] ${jobs} service contract(s) passed their deadline`);
     const n = await expireUnfilledOrders(db);

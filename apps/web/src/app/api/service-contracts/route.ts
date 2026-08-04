@@ -15,13 +15,33 @@ export const dynamic = "force-dynamic";
 
 const CATEGORIES = ["hauling", "escort", "mining", "salvage", "medical", "combat", "exploration", "other"] as const;
 
-const createInput = z.object({
-  title: z.string().trim().min(4).max(120),
-  description: z.string().trim().max(2000).optional(),
-  category: z.enum(CATEGORIES).default("other"),
-  payout: z.number().int().positive().max(1_000_000_000),
-  expiresInHours: z.number().int().positive().max(720).default(168),
-});
+const createInput = z
+  .object({
+    title: z.string().trim().min(4).max(120),
+    description: z.string().trim().max(2000).optional(),
+    category: z.enum(CATEGORIES).default("other"),
+    /** Fixed price, or the ceiling when the contract goes out to bid. */
+    payout: z.number().int().positive().max(1_000_000_000),
+    expiresInHours: z.number().int().positive().max(720).default(168),
+    pricingMode: z.enum(["fixed", "bid"]).default("fixed"),
+    visibility: z.enum(["public", "classified"]).default("public"),
+    /** Bid mode only: how long sealed bidding stays open. */
+    bidWindowHours: z.number().int().positive().max(336).optional(),
+    /** Bid mode only: how long the winner has to accept before it cascades. */
+    awardResponseHours: z.number().int().positive().max(168).default(24),
+  })
+  .refine((v) => v.pricingMode !== "bid" || v.bidWindowHours != null, {
+    message: "A contract out for bid needs a bidding window",
+    path: ["bidWindowHours"],
+  })
+  .refine(
+    (v) => v.pricingMode !== "bid" || (v.bidWindowHours ?? 0) + v.awardResponseHours < v.expiresInHours,
+    {
+      // Otherwise the auction is still resolving when the job it describes has already died.
+      message: "The bidding window plus the acceptance window must finish before the contract expires",
+      path: ["bidWindowHours"],
+    },
+  );
 
 export async function GET(request: Request) {
   const user = await currentUser();
@@ -29,8 +49,12 @@ export async function GET(request: Request) {
   try {
     const contracts = await listContractsBoard(getDb(), {
       viewerId: user?.id ?? null,
+      viewerRole: user?.role ?? null,
       mineOnly: url.searchParams.get("mine") === "1",
-      statuses: url.searchParams.get("all") === "1" ? ["open", "in_progress", "completed"] : undefined,
+      statuses:
+        url.searchParams.get("all") === "1"
+          ? ["open", "bidding", "awarded", "in_progress", "completed"]
+          : undefined,
     });
     return NextResponse.json({ contracts });
   } catch (err) {
@@ -73,6 +97,7 @@ export async function POST(request: Request) {
 
   try {
     const contract = await db.transaction(async (tx) => {
+      const isBid = input.pricingMode === "bid";
       const [created] = await tx
         .insert(serviceContracts)
         .values({
@@ -83,13 +108,18 @@ export async function POST(request: Request) {
           category: input.category,
           payout: input.payout,
           expiresAt: new Date(Date.now() + input.expiresInHours * 3_600_000),
+          pricingMode: input.pricingMode,
+          visibility: input.visibility,
+          status: isBid ? "bidding" : "open",
+          bidsCloseAt: isBid ? new Date(Date.now() + input.bidWindowHours! * 3_600_000) : null,
+          awardResponseHours: isBid ? input.awardResponseHours : null,
         })
         .returning();
       await tx.insert(contractEvents).values({
         contractId: created!.id,
         actorId: user.id,
         type: "created",
-        data: { payout: input.payout },
+        data: { payout: input.payout, pricingMode: input.pricingMode, visibility: input.visibility },
       });
       return created!;
     });

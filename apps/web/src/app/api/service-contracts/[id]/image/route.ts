@@ -32,7 +32,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (contract.issuerId !== user.id) {
     return NextResponse.json({ error: "Only the issuer can attach an image" }, { status: 403 });
   }
-  if (contract.status !== "open" && contract.status !== "in_progress") {
+  if (!["open", "bidding", "awarded", "in_progress"].includes(contract.status)) {
     return NextResponse.json({ error: "This contract is closed" }, { status: 409 });
   }
 

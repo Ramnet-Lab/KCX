@@ -93,9 +93,15 @@ export function stripJpegMetadata(buf: Buffer): Buffer | null {
   return Buffer.concat(out);
 }
 
-/** Where uploads live. A container mounts a volume here so images survive redeploys. */
+/**
+ * Where uploads live. A container mounts a volume here so images survive redeploys.
+ *
+ * The turbopackIgnore is deliberate: this path is dynamic by design (UPLOAD_DIR points at a
+ * mounted volume), and without it the build traces the entire project into the standalone
+ * output — every source file and the public folder shipped inside the server bundle.
+ */
 export function uploadRoot(): string {
-  return resolve(process.env.UPLOAD_DIR ?? join(process.cwd(), "uploads"));
+  return resolve(/* turbopackIgnore: true */ process.env.UPLOAD_DIR ?? join(process.cwd(), "uploads"));
 }
 
 export type StoredImage = { filename: string; mime: string; bytes: number };

@@ -17,12 +17,27 @@ const DEADLINES = [
   { hours: 336, label: "14 days" },
 ];
 
+const BID_WINDOWS = [
+  { hours: 6, label: "6 hours" },
+  { hours: 24, label: "24 hours" },
+  { hours: 72, label: "3 days" },
+];
+
 function timeLeft(iso: string): string {
   const ms = new Date(iso).getTime() - Date.now();
   if (ms <= 0) return "expired";
   const hours = Math.round(ms / 3_600_000);
   if (hours < 1) return `${Math.max(1, Math.round(ms / 60_000))}m left`;
   return hours < 48 ? `${hours}h left` : `${Math.round(hours / 24)}d left`;
+}
+
+function countdown(iso: string): string {
+  const ms = new Date(iso).getTime() - Date.now();
+  if (ms <= 0) return "closed";
+  const mins = Math.round(ms / 60_000);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.round(mins / 60);
+  return hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`;
 }
 
 /**
@@ -72,10 +87,42 @@ export function ContractBoard({
     }
   };
 
+  const respondToAward = async (id: string, action: "accept" | "decline") => {
+    setBusy(id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/service-contracts/${id}/award`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) setError(body.error ?? "Failed");
+      else await refresh();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const withdrawBid = async (id: string) => {
+    setBusy(id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/service-contracts/${id}/bids`, { method: "DELETE" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) setError(body.error ?? "Failed");
+      else await refresh();
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const visible = useMemo(
     () =>
       contracts.filter(
-        (c) => (category === "all" || c.category === category) && (!mineOnly || c.isIssuer || c.isExecutor),
+        (c) =>
+          (category === "all" || c.category === category) &&
+          (!mineOnly || c.isIssuer || c.isExecutor || c.isAwardee),
       ),
     [contracts, category, mineOnly],
   );
@@ -134,9 +181,45 @@ export function ContractBoard({
                 <span className="rounded bg-panel-2 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-ink-dim">
                   {c.category}
                 </span>
+                {c.visibility === "classified" && (
+                  <span
+                    className="rounded bg-danger/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-danger"
+                    title="Details are hidden until someone takes this contract"
+                  >
+                    ▩ Classified
+                  </span>
+                )}
+                {c.pricingMode === "bid" && (
+                  <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-accent">
+                    ⚖ Out for bid
+                  </span>
+                )}
                 <h3 className="text-sm font-bold text-ink">{c.title}</h3>
-                <span className="num ml-auto text-sm font-bold text-up">{fmt(c.payout)} aUEC</span>
+                <span className="num ml-auto text-right text-sm font-bold text-up">
+                  {c.awardedAmount != null ? (
+                    <>
+                      {fmt(c.awardedAmount)} aUEC
+                      <span className="block text-[10px] font-normal text-ink-faint">
+                        won at · budget {fmt(c.payout)}
+                      </span>
+                    </>
+                  ) : c.pricingMode === "bid" ? (
+                    <>
+                      ≤ {fmt(c.payout)} aUEC
+                      <span className="block text-[10px] font-normal text-ink-faint">budget ceiling</span>
+                    </>
+                  ) : (
+                    <>{fmt(c.payout)} aUEC</>
+                  )}
+                </span>
               </div>
+
+              {c.redacted && (
+                <p className="mt-2 rounded border border-dashed border-danger/40 bg-danger/5 px-3 py-2 text-xs text-ink-faint">
+                  <span className="font-bold text-danger">Details withheld.</span> The brief, any
+                  image and the location are released only to whoever takes this contract.
+                </p>
+              )}
 
               {c.description && <p className="mt-1 whitespace-pre-wrap text-xs text-ink-dim">{c.description}</p>}
 
@@ -168,6 +251,18 @@ export function ContractBoard({
                   </span>
                 )}
                 <span suppressHydrationWarning>{timeLeft(c.expiresAt)}</span>
+                {c.status === "bidding" && c.bidsCloseAt && (
+                  <span className="text-accent" suppressHydrationWarning>
+                    bidding closes in {countdown(c.bidsCloseAt)} · {c.bidCount}{" "}
+                    {c.bidCount === 1 ? "bid" : "bids"} (sealed)
+                  </span>
+                )}
+                {c.status === "awarded" && (
+                  <span className="text-accent" suppressHydrationWarning>
+                    awarded to <span className="text-ink-dim">{c.awardedToName}</span>
+                    {c.awardExpiresAt && ` · ${countdown(c.awardExpiresAt)} to accept`}
+                  </span>
+                )}
                 {c.status === "in_progress" && (
                   <span className="text-accent">
                     {c.executorConfirmed && c.issuerConfirmed
@@ -181,6 +276,55 @@ export function ContractBoard({
                 )}
               </div>
 
+              {c.status === "bidding" && !c.isIssuer && (
+                <BidPanel
+                  contract={c}
+                  signedIn={signedIn}
+                  busy={busy === c.id}
+                  onSignIn={() => router.push("/signin")}
+                  onPlaced={refresh}
+                  onWithdraw={() => withdrawBid(c.id)}
+                  onError={setError}
+                />
+              )}
+
+              {c.status === "bidding" && c.isIssuer && (
+                <p className="mt-2 rounded border border-line bg-panel-2 px-3 py-2 text-[11px] text-ink-faint">
+                  Bids are sealed — you'll see the winning number when the window closes, not
+                  before. The lowest bid wins automatically; ties go to whoever bid first. Your
+                  full {fmt(c.payout)} aUEC ceiling stays committed until then.
+                </p>
+              )}
+
+              {c.status === "awarded" && c.isAwardee && (
+                <div className="mt-2 rounded border border-accent/40 bg-accent/5 px-3 py-2">
+                  <p className="text-xs text-ink">
+                    <span className="font-bold text-accent">You won this contract</span> at{" "}
+                    <span className="num font-bold">{fmt(c.awardedAmount ?? 0)} aUEC</span>.
+                    {c.redacted && " Accepting releases the full brief and any attached image."}
+                  </p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={() => respondToAward(c.id, "accept")}
+                      disabled={busy === c.id}
+                      className="tap rounded bg-up/20 px-3 py-1 text-xs font-bold text-up hover:bg-up/30 disabled:opacity-50"
+                    >
+                      Accept and start
+                    </button>
+                    <button
+                      onClick={() => respondToAward(c.id, "decline")}
+                      disabled={busy === c.id}
+                      className="tap rounded px-3 py-1 text-xs text-ink-faint hover:text-danger disabled:opacity-50"
+                    >
+                      Decline
+                    </button>
+                    <span className="text-[11px] text-ink-faint">
+                      Declining passes it to the next-lowest bidder.
+                    </span>
+                  </div>
+                </div>
+              )}
+
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 {c.status === "open" && !c.isIssuer && (
                   <button
@@ -188,7 +332,7 @@ export function ContractBoard({
                     disabled={busy === c.id}
                     className="tap rounded bg-up/20 px-3 py-1 text-xs font-bold text-up hover:bg-up/30 disabled:opacity-50"
                   >
-                    Take this contract
+                    {c.redacted ? "Take it — details revealed on accept" : "Take this contract"}
                   </button>
                 )}
                 {c.status === "in_progress" && (c.isIssuer || c.isExecutor) && (
@@ -213,7 +357,7 @@ export function ContractBoard({
                     </button>
                   </>
                 )}
-                {c.status === "open" && c.isIssuer && (
+                {(c.status === "open" || c.status === "bidding" || c.status === "awarded") && c.isIssuer && (
                   <button
                     onClick={() => act(c.id, "cancel")}
                     disabled={busy === c.id}
@@ -236,6 +380,131 @@ export function ContractBoard({
   );
 }
 
+/**
+ * Sealed-bid entry for one contract.
+ *
+ * Shows the bidder their own number and the total count, never anyone else's amount — the
+ * board never receives other bids, so there is nothing here that a devtools panel could
+ * reveal that the API didn't already decide to send.
+ */
+function BidPanel({
+  contract,
+  signedIn,
+  busy,
+  onSignIn,
+  onPlaced,
+  onWithdraw,
+  onError,
+}: {
+  contract: ServiceContractDto;
+  signedIn: boolean;
+  busy: boolean;
+  onSignIn: () => void;
+  onPlaced: () => void;
+  onWithdraw: () => void;
+  onError: (msg: string | null) => void;
+}) {
+  const [amount, setAmount] = useState("");
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const mine = contract.myBid && contract.myBid.status !== "withdrawn" ? contract.myBid : null;
+
+  const submit = async () => {
+    const value = Math.round(Number(amount));
+    if (!(value > 0)) return;
+    setSaving(true);
+    onError(null);
+    try {
+      const res = await fetch(`/api/service-contracts/${contract.id}/bids`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ amount: value }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) onError(body.error ?? "Could not bid");
+      else {
+        setOpen(false);
+        setAmount("");
+        onPlaced();
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!signedIn) {
+    return (
+      <div className="mt-2">
+        <button
+          onClick={onSignIn}
+          className="tap rounded bg-accent/20 px-3 py-1 text-xs font-bold text-accent hover:bg-accent/30"
+        >
+          Sign in to bid
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 rounded border border-line bg-panel-2 px-3 py-2">
+      {mine ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs">
+          <span className="text-ink-dim">
+            Your bid: <span className="num font-bold text-ink">{fmt(mine.amount)} aUEC</span>
+          </span>
+          <button onClick={() => setOpen((v) => !v)} className="tap text-accent hover:underline">
+            {open ? "cancel" : "revise"}
+          </button>
+          <button onClick={onWithdraw} disabled={busy} className="tap text-ink-faint hover:text-danger disabled:opacity-50">
+            withdraw
+          </button>
+        </div>
+      ) : (
+        !open && (
+          <button
+            onClick={() => setOpen(true)}
+            className="tap rounded bg-accent/20 px-3 py-1 text-xs font-bold text-accent hover:bg-accent/30"
+          >
+            Place a bid
+          </button>
+        )
+      )}
+
+      {open && (
+        <div className="mt-2 flex flex-wrap items-end gap-2">
+          <label className="flex-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">
+              Your price (aUEC) — must be at or under {fmt(contract.payout)}
+            </span>
+            <input
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={contract.payout}
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="0"
+              className="num mt-1 w-full rounded border border-line bg-bg px-2 py-1.5 text-right text-sm text-ink focus:outline-none"
+            />
+          </label>
+          <button
+            onClick={submit}
+            disabled={saving || !(Number(amount) > 0)}
+            className="tap rounded bg-accent/20 px-3 py-1.5 text-xs font-bold text-accent hover:bg-accent/30 disabled:opacity-40"
+          >
+            {saving ? "Sending…" : mine ? "Update bid" : "Submit bid"}
+          </button>
+        </div>
+      )}
+
+      <p className="mt-1 text-[11px] text-ink-faint">
+        Sealed bidding — nobody sees your number, and you can't see theirs. Lowest bid wins when
+        the window closes.
+      </p>
+    </div>
+  );
+}
+
 function ComposeContract({ onPosted }: { onPosted: () => void }) {
   const [image, setImage] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
@@ -244,6 +513,10 @@ function ComposeContract({ onPosted }: { onPosted: () => void }) {
   const [category, setCategory] = useState<Category>("hauling");
   const [payout, setPayout] = useState("");
   const [hours, setHours] = useState(168);
+  const [pricingMode, setPricingMode] = useState<"fixed" | "bid">("fixed");
+  const [bidWindowHours, setBidWindowHours] = useState(24);
+  const [awardResponseHours, setAwardResponseHours] = useState(24);
+  const [classified, setClassified] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -260,6 +533,9 @@ function ComposeContract({ onPosted }: { onPosted: () => void }) {
           category,
           payout: Math.round(Number(payout)),
           expiresInHours: hours,
+          pricingMode,
+          visibility: classified ? "classified" : "public",
+          ...(pricingMode === "bid" ? { bidWindowHours, awardResponseHours } : {}),
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -325,7 +601,9 @@ function ComposeContract({ onPosted }: { onPosted: () => void }) {
             </select>
           </label>
           <label className="flex-1">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">Payout (aUEC)</span>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">
+              {pricingMode === "bid" ? "Most you'll pay (aUEC)" : "Payout (aUEC)"}
+            </span>
             <input
               type="number"
               inputMode="numeric"
@@ -337,6 +615,76 @@ function ComposeContract({ onPosted }: { onPosted: () => void }) {
             />
           </label>
         </div>
+
+        <div>
+          <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">How it's priced</span>
+          <div className="mt-1 flex gap-1">
+            <button
+              onClick={() => setPricingMode("fixed")}
+              className={`tap flex-1 rounded border px-2 py-1.5 text-xs ${
+                pricingMode === "fixed" ? "border-accent text-accent" : "border-line text-ink-faint hover:text-ink-dim"
+              }`}
+            >
+              Fixed price — first to take it
+            </button>
+            <button
+              onClick={() => setPricingMode("bid")}
+              className={`tap flex-1 rounded border px-2 py-1.5 text-xs ${
+                pricingMode === "bid" ? "border-accent text-accent" : "border-line text-ink-faint hover:text-ink-dim"
+              }`}
+            >
+              Out for bid — lowest wins
+            </button>
+          </div>
+        </div>
+
+        {pricingMode === "bid" && (
+          <div className="rounded border border-accent/30 bg-accent/5 p-3">
+            <div className="flex flex-wrap gap-3">
+              <div className="flex-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">
+                  Bidding stays open for
+                </span>
+                <div className="mt-1 flex gap-1">
+                  {BID_WINDOWS.map((w) => (
+                    <button
+                      key={w.hours}
+                      onClick={() => setBidWindowHours(w.hours)}
+                      className={`tap flex-1 rounded border px-2 py-1 text-xs ${
+                        bidWindowHours === w.hours
+                          ? "border-accent text-accent"
+                          : "border-line text-ink-faint hover:text-ink-dim"
+                      }`}
+                    >
+                      {w.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <label className="w-32">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">
+                  Winner has (hrs)
+                </span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={168}
+                  value={awardResponseHours}
+                  onChange={(e) => setAwardResponseHours(Math.max(1, Math.round(Number(e.target.value) || 1)))}
+                  className="num mt-1 w-full rounded border border-line bg-bg px-2 py-1 text-right text-sm text-ink focus:outline-none"
+                />
+              </label>
+            </div>
+            <p className="mt-2 text-[11px] text-ink-faint">
+              Bids are sealed: nobody sees anyone else's number. When the window closes the
+              lowest bid wins automatically — ties go to whoever bid first — and that bidder
+              gets the time above to accept. If they decline or go quiet it passes to the next
+              lowest. Your full ceiling stays committed until a winner accepts, then only the
+              winning amount does.
+            </p>
+          </div>
+        )}
         <div>
           <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">Complete within</span>
           <div className="mt-1 flex flex-wrap gap-1">
@@ -394,6 +742,31 @@ function ComposeContract({ onPosted }: { onPosted: () => void }) {
           )}
         </label>
 
+        <div className={`rounded border p-3 ${classified ? "border-danger/40 bg-danger/5" : "border-line"}`}>
+          <label className="flex items-start gap-2">
+            <input
+              type="checkbox"
+              checked={classified}
+              onChange={(e) => setClassified(e.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-[#e8b449]"
+            />
+            <span className="text-xs">
+              <span className="font-bold text-ink">Classified — hide the details until someone takes it</span>
+              <span className="mt-1 block text-[11px] text-ink-faint">
+                The brief, the image and the location stay hidden from the board and are
+                released only to whoever accepts. Everyone can still see the title, category
+                and payout — that's how people decide whether to take it.
+              </span>
+            </span>
+          </label>
+          {classified && (
+            <p className="mt-2 rounded bg-danger/10 px-2 py-1.5 text-[11px] text-danger">
+              Your title stays public. Keep the target's name out of it — put that in the
+              details below, which is what gets withheld.
+            </p>
+          )}
+        </div>
+
         {error && <div className="rounded border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">{error}</div>}
 
         <div className="flex items-center gap-3">
@@ -405,7 +778,9 @@ function ComposeContract({ onPosted }: { onPosted: () => void }) {
             {busy ? "Posting…" : "Post contract"}
           </button>
           <span className="text-[11px] text-ink-faint">
-            The payout is committed against your declared balance until the contract closes.
+            {pricingMode === "bid"
+              ? "Your ceiling is committed against your declared balance while bidding runs."
+              : "The payout is committed against your declared balance until the contract closes."}
           </span>
         </div>
       </div>

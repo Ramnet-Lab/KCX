@@ -18,7 +18,7 @@ export default async function ContractsPage() {
 
   try {
     const db = getDb();
-    contracts = await listContractsBoard(db, { viewerId: user?.id ?? null });
+    contracts = await listContractsBoard(db, { viewerId: user?.id ?? null, viewerRole: user?.role ?? null });
     if (user) toRate = await pendingContractRatings(db, user.id);
   } catch (err) {
     console.error("[contracts page]", err instanceof Error ? err.message : err);

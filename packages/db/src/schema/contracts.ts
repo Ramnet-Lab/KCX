@@ -41,8 +41,12 @@ export const CONTRACT_CATEGORIES = [
 ] as const;
 
 export const CONTRACT_STATUSES = [
-  /** Posted, nobody has taken it. */
+  /** Posted at a fixed payout, nobody has taken it. */
   "open",
+  /** Out for bid; sealed bids accepted until bids_close_at. */
+  "bidding",
+  /** Bidding closed and a winner picked, waiting on them to accept. */
+  "awarded",
   /** Claimed by an executor and locked from others. */
   "in_progress",
   /** Both sides confirmed; payout transferred. */
@@ -51,6 +55,27 @@ export const CONTRACT_STATUSES = [
   "cancelled",
   /** Deadline passed without completion. */
   "expired",
+] as const;
+
+/** Statuses in which the issuer is still on the hook for the money. */
+export const CONTRACT_LIVE_STATUSES = ["open", "bidding", "awarded", "in_progress"] as const;
+
+export const CONTRACT_PRICING_MODES = [
+  /** Issuer names the payout; first executor to claim it takes the job. */
+  "fixed",
+  /** Reverse auction: the payout is a ceiling and the lowest sealed bid wins. */
+  "bid",
+] as const;
+
+export const CONTRACT_VISIBILITIES = [
+  "public",
+  /**
+   * Details withheld until someone takes the job. Title, category and payout stay
+   * visible — a contract nobody can see is a contract nobody can accept — but the
+   * description, image and location are never sent to anyone but the issuer, the
+   * executor (or awarded winner) and moderators.
+   */
+  "classified",
 ] as const;
 
 export const serviceContracts = pgTable(
@@ -70,9 +95,28 @@ export const serviceContracts = pgTable(
     title: text("title").notNull(),
     description: text("description"),
     category: text("category", { enum: CONTRACT_CATEGORIES }).notNull().default("other"),
-    /** Agreed payment in aUEC, held as a commitment against the issuer's balance. */
+    /**
+     * Payment in aUEC, held as a commitment against the issuer's balance.
+     *
+     * In `fixed` mode this is the agreed price. In `bid` mode it is the CEILING — the most
+     * the issuer is willing to pay — and the winning bid lands in `awardedAmount`. Both are
+     * kept: the ceiling is the audit trail of what was advertised, and settlement always
+     * pays `coalesce(awarded_amount, payout)`.
+     */
     payout: bigint("payout", { mode: "number" }).notNull(),
     locationId: integer("location_id").references(() => locations.id),
+
+    pricingMode: text("pricing_mode", { enum: CONTRACT_PRICING_MODES }).notNull().default("fixed"),
+    visibility: text("visibility", { enum: CONTRACT_VISIBILITIES }).notNull().default("public"),
+
+    /** Bid mode: when sealed bidding closes and a winner is picked. */
+    bidsCloseAt: timestamp("bids_close_at", { withTimezone: true }),
+    /** How long the winner has to accept before the award cascades to the next bidder. */
+    awardResponseHours: integer("award_response_hours"),
+    /** Set at award time; null again if they decline and it moves on. */
+    awardedToId: uuid("awarded_to_id").references(() => users.id),
+    awardedAmount: bigint("awarded_amount", { mode: "number" }),
+    awardExpiresAt: timestamp("award_expires_at", { withTimezone: true }),
     /**
      * Generated filename of an attached screenshot — a target, a wreck, cargo on a pad.
      * Stored as a bare name, never a path or URL, so nothing user-supplied is ever
@@ -98,7 +142,63 @@ export const serviceContracts = pgTable(
     index("contracts_board").on(t.status, t.createdAt),
     index("contracts_issuer").on(t.issuerId, t.status),
     index("contracts_executor").on(t.executorId, t.status),
+    /** The sweep looks up contracts whose bidding window or award window has run out. */
+    index("contracts_bids_close").on(t.bidsCloseAt),
+    index("contracts_award_expiry").on(t.awardExpiresAt),
     check("contracts_payout_positive", sql`${t.payout} > 0`),
+    /** A winning bid can never exceed the advertised ceiling. */
+    check("contracts_award_within_ceiling", sql`${t.awardedAmount} IS NULL OR ${t.awardedAmount} <= ${t.payout}`),
+    check("contracts_award_positive", sql`${t.awardedAmount} IS NULL OR ${t.awardedAmount} > 0`),
+    /** Bid mode is meaningless without a close time; fixed mode must not carry one. */
+    check(
+      "contracts_bid_mode_has_window",
+      sql`(${t.pricingMode} = 'bid') = (${t.bidsCloseAt} IS NOT NULL)`,
+    ),
+  ],
+);
+
+/**
+ * Sealed bids on a contract in `bid` mode.
+ *
+ * Sealed on purpose: bidders see the count, never each other's numbers. An open book on a
+ * reverse auction turns into last-second undercutting by one aUEC, which is the same
+ * dynamic the order board's price bands exist to prevent — and it punishes whoever bids
+ * honestly first. Amounts become visible once bidding closes.
+ *
+ * Bidders post no collateral. They are selling labour, not money; the issuer is the only
+ * party with something to back, and their ceiling is committed for the whole window.
+ */
+export const CONTRACT_BID_STATUSES = [
+  "active",
+  "withdrawn",
+  "won",
+  "lost",
+  /** Won it, then declined or let the acceptance window lapse. */
+  "passed",
+] as const;
+
+export const contractBids = pgTable(
+  "contract_bids",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    contractId: uuid("contract_id")
+      .notNull()
+      .references(() => serviceContracts.id),
+    bidderId: uuid("bidder_id")
+      .notNull()
+      .references(() => users.id),
+    amount: bigint("amount", { mode: "number" }).notNull(),
+    note: text("note"),
+    status: text("status", { enum: CONTRACT_BID_STATUSES }).notNull().default("active"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    /** One bid per person per contract — revising means updating it, not stacking them. */
+    uniqueIndex("contract_bids_one_per_bidder").on(t.contractId, t.bidderId),
+    /** Winner selection reads this: lowest amount, earliest first on a tie. */
+    index("contract_bids_ranking").on(t.contractId, t.amount, t.createdAt),
+    check("contract_bids_amount_positive", sql`${t.amount} > 0`),
   ],
 );
 
@@ -111,6 +211,18 @@ export const CONTRACT_EVENT_TYPES = [
   "completed",
   "cancelled",
   "expired",
+  // --- reverse auction ---
+  "bid_placed",
+  "bid_revised",
+  "bid_withdrawn",
+  "bidding_closed",
+  "awarded",
+  "award_accepted",
+  "award_declined",
+  /** Winner never answered inside their window. */
+  "award_lapsed",
+  /** Every bidder declined or lapsed; nothing left to cascade to. */
+  "bidding_exhausted",
 ] as const;
 
 /** Append-only audit trail; contract state is always reconstructible from these. */

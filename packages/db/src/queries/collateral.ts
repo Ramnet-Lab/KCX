@@ -10,7 +10,8 @@ import { orders, userHoldings, users } from "../schema/orders";
  *
  *   1. Resting orders they posted     → the UNRESERVED remainder (remaining − reserved)
  *   2. Open escrow contracts          → whichever side of the trade they owe
- *   3. Service contracts they issued  → the payout they owe on completion (aUEC only)
+ *   3. Service contracts they issued  → the payout they owe on completion (aUEC only),
+ *                                       or the ceiling while a reverse auction is running
  *
  * (3) lives here rather than at the call site on purpose: when it was summed by one caller,
  * every other consumer — the portfolio panel, order placement, balance edits — silently
@@ -49,9 +50,13 @@ const COMMITTED_AUEC = (userId: string) => sql`(
     ), 0)
     +
     coalesce((
-      SELECT sum(sc.payout)
+      -- While a reverse auction is open the issuer is on the hook for the CEILING, since
+      -- any bid up to it could win. Once awarded, only the winning bid is committed and
+      -- the difference frees up immediately.
+      SELECT sum(coalesce(sc.awarded_amount, sc.payout))
       FROM service_contracts sc
-      WHERE sc.issuer_id = ${userId} AND sc.status IN ('open','in_progress')
+      WHERE sc.issuer_id = ${userId}
+        AND sc.status IN ('open','bidding','awarded','in_progress')
     ), 0)
 )`;
 
