@@ -2,13 +2,26 @@ import type { IndexLatest, IndexPoint, IndexSeries, SectorCode } from "@kcx/shar
 import { sql } from "drizzle-orm";
 import type { Db } from "../client";
 
-/** Full index history per sector (points are 30-min captures; fine to ship whole for months). */
+/**
+ * Full index history per sector.
+ *
+ * DISTINCT ON collapses points that land in the same epoch second, keeping the newest.
+ * Points used to arrive only from the 30-minute poll, one timestamp per capture; a settlement
+ * now writes its own reference point at whatever instant it happened, and two of those 93ms
+ * apart both truncate to the same second here. lightweight-charts requires strictly ascending
+ * unique times and throws — taking down the whole page, not just the chart.
+ *
+ * Collapsing rather than sub-second timestamps because the chart's resolution IS one second:
+ * two index values inside the same second are not information a viewer can use, and the later
+ * one is the more complete anyway.
+ */
 export async function indexSeries(db: Db, sinceDays = 90): Promise<IndexSeries> {
   const result = await db.execute<{ sector: SectorCode; t: string; value: string }>(sql`
-    SELECT sector, extract(epoch FROM captured_at)::bigint::text AS t, value::text AS value
+    SELECT DISTINCT ON (sector, extract(epoch FROM captured_at)::bigint)
+           sector, extract(epoch FROM captured_at)::bigint::text AS t, value::text AS value
     FROM market_index_points
     WHERE captured_at >= now() - make_interval(days => ${sinceDays})
-    ORDER BY captured_at ASC
+    ORDER BY sector, extract(epoch FROM captured_at)::bigint ASC, captured_at DESC
   `);
   const series: IndexSeries = {};
   for (const r of result.rows) {

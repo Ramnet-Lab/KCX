@@ -11,7 +11,7 @@
 import { loadRootEnv } from "../env";
 loadRootEnv();
 
-import { captureAllMarks, closeDb, getDb, judgePrint, refreshCommodityMark, rolloverSeason, tickerEntries } from "@kcx/db";
+import { captureAllMarks, closeDb, getDb, judgePrint, refreshCommodityMark, rolloverSeason, tickerEntries, indexSeries } from "@kcx/db";
 import { sql } from "drizzle-orm";
 import { rebuildCandlesSince } from "../jobs/candles";
 import { rebuildIndexSince } from "../jobs/index-points";
@@ -297,14 +297,16 @@ async function main() {
         const seededMark = await scalarIn(tx, sql`SELECT mark_price::text FROM commodity_marks_latest WHERE commodity_id = ${target.id}`);
         check(`${target.code} starts on the NPC seed`, seededMark == null, `npc ${reference}`);
         const settledAt = new Date();
+        // Stored truncated to the second — see refreshCommodityMark. Assert where it lands.
+        const storedAt = new Date(Math.floor(settledAt.getTime() / 1000) * 1000);
         await refreshCommodityMark(tx, target.id, settledAt);
         const movedMark = await scalarIn(tx, sql`SELECT mark_price::text FROM commodity_marks_latest WHERE commodity_id = ${target.id}`);
         const refPoint = await scalarIn(
           tx,
-          sql`SELECT count(*)::text FROM commodity_reference_points WHERE commodity_id = ${target.id} AND captured_at = ${settledAt}`,
+          sql`SELECT count(*)::text FROM commodity_reference_points WHERE commodity_id = ${target.id} AND captured_at = ${storedAt}`,
         );
         check("a settled print produces a player mark", movedMark != null, `${reference} (npc) → ${movedMark} (player)`);
-        check("a settlement writes its own reference point", Number(refPoint) === 1, settledAt.toISOString());
+        check("a settlement writes its own reference point", Number(refPoint) === 1, storedAt.toISOString());
 
         throw ROLLBACK;
       })
@@ -346,6 +348,31 @@ async function main() {
       `range ${Number(r.min).toFixed(0)}–${Number(r.max).toFixed(0)}`,
     );
   }
+  // Chart data contract: lightweight-charts requires strictly ascending UNIQUE times and
+  // throws on a violation, which in a React effect takes the whole page down rather than
+  // just the chart. Times are epoch SECONDS, so two index points inside the same second
+  // collide — which is exactly what settlement-written reference points introduced.
+  const dupSeconds = Number(
+    await scalar(sql`
+      SELECT count(*)::text FROM (
+        SELECT sector, extract(epoch FROM captured_at)::bigint AS sec
+        FROM market_index_points GROUP BY 1, 2 HAVING count(*) > 1
+      ) x
+    `),
+  );
+  const series = await indexSeries(db);
+  let ordering = true;
+  for (const [, pts] of Object.entries(series)) {
+    for (let i = 1; i < (pts?.length ?? 0); i++) {
+      if (!(pts![i]!.time > pts![i - 1]!.time)) ordering = false;
+    }
+  }
+  check(
+    "the index series is strictly ascending with no duplicate seconds",
+    ordering,
+    `${dupSeconds} same-second collision(s) in storage, collapsed on read`,
+  );
+
   // A chained series must never produce a non-positive or non-finite value.
   const bad = Number(
     await scalar(sql`SELECT count(*)::text FROM market_index_points WHERE value IS NULL OR value <= 0 OR value = 'NaN'::numeric`),

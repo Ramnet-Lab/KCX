@@ -176,8 +176,19 @@ function IndexChart({
       bottomColor: "rgba(232, 180, 73, 0.02)",
       lineWidth: 2,
     });
-    area.setData(points.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })));
-    lastTimeRef.current = points[points.length - 1]?.time ?? 0;
+    // lightweight-charts asserts on duplicate or out-of-order times and THROWS, which in a
+    // React effect means the whole page dies on a rendering concern. Sanitising here is not
+    // papering over the server bug (fixed separately, in indexSeries and market-point.ts) —
+    // it is refusing to let any future data problem, from any source, take the site down.
+    const seen = new Set<number>();
+    const clean: { time: UTCTimestamp; value: number }[] = [];
+    for (const p of [...points].sort((a, b) => a.time - b.time)) {
+      if (!Number.isFinite(p.time) || !Number.isFinite(p.value) || seen.has(p.time)) continue;
+      seen.add(p.time);
+      clean.push({ time: p.time as UTCTimestamp, value: p.value });
+    }
+    area.setData(clean);
+    lastTimeRef.current = clean[clean.length - 1]?.time ?? 0;
     chart.timeScale().fitContent();
     chartRef.current = chart;
     seriesRef.current = area;

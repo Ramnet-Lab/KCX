@@ -202,7 +202,22 @@ export async function captureAllMarks(tx: Exec, capturedAt: Date): Promise<void>
  * bucket instead of waiting up to 30 minutes for the next capture.
  */
 export async function refreshCommodityMark(tx: Exec, commodityId: number, at: Date): Promise<void> {
+  // Truncated to the second before it becomes a reference point. A settlement can happen at
+  // any instant, and everything downstream keys time in whole seconds — the index series and
+  // the charts both do `extract(epoch)::bigint`. Two settlements 93ms apart produced two rows
+  // that collapsed to one timestamp there, and lightweight-charts throws on duplicate times
+  // rather than tolerating them, taking the page down with it.
+  //
+  // Rounding here rather than only de-duplicating at read time so the stored history is
+  // consistent with how it is consumed; the read path de-duplicates as well, for rows written
+  // before this and for anything else that reaches the table.
+  const second = new Date(Math.floor(at.getTime() / 1000) * 1000);
   await tx.execute(sql`
+    -- Statistics use the TRUE instant, not the rounded one. The window filter is an
+    -- executed_at upper bound, and the print this refresh exists to account for was written
+    -- moments earlier in the same transaction — rounding that boundary down excluded it, so
+    -- a commodity's first trade produced no mark at all until the next poll. The rounding
+    -- applies only to the timestamp we STORE.
     WITH s AS (${marketStatsCte(at, commodityId)}),
     m AS (
       SELECT
@@ -237,7 +252,7 @@ export async function refreshCommodityMark(tx: Exec, commodityId: number, at: Da
     ref AS (
       INSERT INTO commodity_reference_points
         (commodity_id, captured_at, best_sell, best_buy, sell_terminals, buy_terminals, market_price, print_count)
-      SELECT m.commodity_id, ${at}, m.best_sell, m.best_buy, m.sell_terminals, m.buy_terminals,
+      SELECT m.commodity_id, ${second}, m.best_sell, m.best_buy, m.sell_terminals, m.buy_terminals,
              coalesce(m.player_mark, m.best_sell), m.print_count
       FROM m
       WHERE coalesce(m.player_mark, m.best_sell) IS NOT NULL
@@ -247,7 +262,7 @@ export async function refreshCommodityMark(tx: Exec, commodityId: number, at: Da
       RETURNING 1
     )
     INSERT INTO commodity_marks_latest ${MARKS_COLUMNS}
-    SELECT ${MARKS_SELECT}, ${at} FROM m
+    SELECT ${MARKS_SELECT}, ${second} FROM m
     ON CONFLICT (commodity_id) DO UPDATE SET
       mark_price         = excluded.mark_price,
       last_price         = excluded.last_price,
