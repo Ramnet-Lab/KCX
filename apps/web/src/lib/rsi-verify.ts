@@ -51,10 +51,23 @@ export async function startVerification(
   const db = getDb();
   const lower = normalised.toLowerCase();
 
-  // One account per RSI handle — the whole anti-alt design rests on this.
-  const [claimed] = await db.select({ id: users.id }).from(users).where(eq(users.handle, lower));
-  if (claimed && claimed.id !== userId) {
-    return { ok: false, message: "That RSI handle is already linked to a KCX account." };
+  /*
+   * A claimed handle is NOT a reason to refuse a code.
+   *
+   * Re-verifying is the documented recovery path: only the person who can edit that handle's
+   * RSI bio can complete it, so proving it again is proof of the same ownership that created
+   * the account. Refusing here locked out anyone on a new device — the phone has no session,
+   * so `userId` is null and every returning trader looked like an impostor.
+   *
+   * The one-account-per-handle invariant is enforced where it belongs, at completion: the
+   * check step signs into the EXISTING account rather than creating a second one. The only
+   * case worth blocking is a signed-in trader trying to claim someone else's handle.
+   */
+  if (userId) {
+    const [claimed] = await db.select({ id: users.id }).from(users).where(eq(users.handle, lower));
+    if (claimed && claimed.id !== userId) {
+      return { ok: false, message: "That RSI handle is already linked to a different KCX account." };
+    }
   }
 
   const code = generateVerificationCode((max) => randomInt(max));

@@ -5,6 +5,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AccountActions } from "@/components/account-actions";
 import { AccountPasskeys } from "@/components/account-passkeys";
+import { AccountPassword } from "@/components/account-password";
+import { MIN_PASSWORD_LENGTH } from "@/lib/password";
 import { currentUser } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -114,13 +116,19 @@ export default async function AccountPage() {
 
       <AccountPasskeys initial={devices} />
 
+      <AccountPassword hasPassword={!!user.passwordHash} minLength={MIN_PASSWORD_LENGTH} />
+
       <section className="mt-6 rounded border border-line bg-panel p-4 text-xs text-ink-dim">
         <h2 className="mb-2 text-sm font-bold text-ink">How your account works</h2>
         <ul className="list-inside list-disc space-y-1">
           <li>Your RSI handle is your identity — one KCX account per handle.</li>
-          <li>Passkeys are just keys to the door. Losing them all is recoverable: verify your handle again.</li>
+          <li>
+            Passkeys and passwords are just keys to the door. Losing them all is recoverable:
+            verify your handle again.
+          </li>
+          <li>A passkey never leaves the device that made it — a password is what gets you in elsewhere.</li>
           <li>We never ask for your RSI password, and we only read your public profile page.</li>
-          <li>We store no email address and no password.</li>
+          <li>We store no email address, and any password you set is stored only as a scrypt hash.</li>
         </ul>
       </section>
     </div>

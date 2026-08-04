@@ -4,7 +4,7 @@ import { startAuthentication, startRegistration } from "@simplewebauthn/browser"
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
-type Step = "choose" | "handle" | "paste" | "passkey";
+type Step = "choose" | "handle" | "paste" | "passkey" | "password";
 
 const post = async (url: string, body: unknown) => {
   const res = await fetch(url, {
@@ -25,6 +25,7 @@ const post = async (url: string, body: unknown) => {
 export function SignInFlow() {
   const [step, setStep] = useState<Step>("choose");
   const [handle, setHandle] = useState("");
+  const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +71,20 @@ export function SignInFlow() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const passwordSignIn = async () => {
+    setBusy(true);
+    setError(null);
+    const res = await post("/api/auth/password", {
+      action: "login",
+      handle: handle.trim(),
+      password,
+    });
+    setBusy(false);
+    if (!res.ok) return setError(res.body.error ?? "Sign-in failed");
+    router.push("/account");
+    router.refresh();
   };
 
   const requestCode = async () => {
@@ -119,6 +134,17 @@ export function SignInFlow() {
     }
   };
 
+  const savePassword = async () => {
+    setBusy(true);
+    setError(null);
+    const res = await post("/api/auth/password", { action: "set", password });
+    setBusy(false);
+    if (!res.ok) return setError(res.body.error ?? "Could not set password");
+    setPassword("");
+    router.push("/account");
+    router.refresh();
+  };
+
   const skipPasskey = () => {
     router.push("/account");
     router.refresh();
@@ -128,8 +154,9 @@ export function SignInFlow() {
     <div className="mx-auto max-w-lg">
       <h1 className="mb-1 text-lg font-bold text-ink">Sign in to KCX</h1>
       <p className="mb-6 text-xs text-ink-dim">
-        Your RSI account is your identity here. No password, no email — you prove the handle is
-        yours, then a passkey gets you back in.
+        Your RSI account is your identity here — no email needed. Prove the handle is yours once,
+        then get back in with a passkey or a password. Verifying your handle again always works
+        if you lose both.
       </p>
 
       {!passkeysUsable && (
@@ -167,8 +194,17 @@ export function SignInFlow() {
           </button>
           <div className="text-center text-[11px] text-ink-faint">— or —</div>
           <button
+            onClick={() => setStep("password")}
+            className="tap w-full rounded border border-line px-4 py-3 text-sm text-ink-dim hover:border-ink-faint hover:text-ink"
+          >
+            Sign in with a password
+            <span className="block text-[11px] font-normal text-ink-faint">
+              If you set one — works on any device
+            </span>
+          </button>
+          <button
             onClick={() => setStep("handle")}
-            className={`w-full rounded border px-4 py-3 text-sm ${
+            className={`tap w-full rounded border px-4 py-3 text-sm ${
               passkeysUsable
                 ? "border-line text-ink-dim hover:border-ink-faint hover:text-ink"
                 : "border-accent/60 font-bold text-accent hover:bg-accent/10"
@@ -176,9 +212,52 @@ export function SignInFlow() {
           >
             Verify my RSI handle
             <span className="block text-[11px] font-normal text-ink-faint">
-              New here, or signing in on a new device
+              New here, or locked out — always works
             </span>
           </button>
+        </div>
+      )}
+
+      {step === "password" && (
+        <div className="space-y-3">
+          <label className="block">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">RSI handle</span>
+            <input
+              autoFocus
+              autoComplete="username"
+              value={handle}
+              onChange={(e) => setHandle(e.target.value)}
+              placeholder="e.g. ramnet"
+              className="mt-1 w-full rounded border border-line bg-bg px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-ink-faint focus:outline-none"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-ink-faint">Password</span>
+            <input
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && password && passwordSignIn()}
+              className="mt-1 w-full rounded border border-line bg-bg px-3 py-2 text-sm text-ink focus:border-ink-faint focus:outline-none"
+            />
+          </label>
+          <div className="flex gap-2">
+            <button
+              onClick={passwordSignIn}
+              disabled={busy || handle.trim().length < 3 || !password}
+              className="tap rounded border border-accent/60 px-4 py-2 text-sm font-bold text-accent hover:bg-accent/10 disabled:opacity-50"
+            >
+              {busy ? "…" : "Sign in"}
+            </button>
+            <button onClick={() => setStep("choose")} className="tap px-3 text-xs text-ink-faint hover:text-ink">
+              Back
+            </button>
+          </div>
+          <p className="text-[11px] text-ink-faint">
+            No password set? Verify your RSI handle instead — that always works, and you can set
+            a password afterwards from your account page.
+          </p>
         </div>
       )}
 
@@ -266,21 +345,49 @@ export function SignInFlow() {
       {step === "passkey" && (
         <div className="space-y-4">
           <p className="text-sm text-ink-dim">
-            Add a passkey so you can sign in with a tap next time — fingerprint, face, or device
-            PIN. Lose it and you can always verify your RSI handle again.
+            You're signed in. Set up how you'll get back in next time — you can do both.
           </p>
-          <div className="flex gap-2">
+
+          <div className="rounded border border-line p-3">
+            <p className="text-xs text-ink-dim">
+              <span className="font-bold text-ink">Passkey</span> — sign in with a tap:
+              fingerprint, face or device PIN. Fastest and safest, but it only works on{" "}
+              <span className="text-ink">this</span> device.
+            </p>
             <button
               onClick={enrolPasskey}
-              disabled={busy}
-              className="rounded border border-accent/60 px-4 py-2 text-sm font-bold text-accent hover:bg-accent/10 disabled:opacity-50"
+              disabled={busy || !passkeysUsable}
+              className="tap mt-2 rounded border border-accent/60 px-4 py-2 text-sm font-bold text-accent hover:bg-accent/10 disabled:opacity-50"
             >
               {busy ? "Waiting for your device…" : "Add a passkey"}
             </button>
-            <button onClick={skipPasskey} className="px-3 text-xs text-ink-faint hover:text-ink">
-              Skip for now
+          </div>
+
+          <div className="rounded border border-line p-3">
+            <p className="text-xs text-ink-dim">
+              <span className="font-bold text-ink">Password</span> — works on every device,
+              including your phone. Set one if you don't want to re-verify each time you switch.
+            </p>
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="At least 10 characters"
+              className="mt-2 w-full rounded border border-line bg-bg px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-ink-faint focus:outline-none"
+            />
+            <button
+              onClick={savePassword}
+              disabled={busy || password.length < 10}
+              className="tap mt-2 rounded border border-accent/60 px-4 py-2 text-sm font-bold text-accent hover:bg-accent/10 disabled:opacity-50"
+            >
+              {busy ? "…" : "Set password"}
             </button>
           </div>
+
+          <button onClick={skipPasskey} className="tap px-3 text-xs text-ink-faint hover:text-ink">
+            Skip — I'll verify my handle again next time
+          </button>
         </div>
       )}
     </div>

@@ -35,6 +35,13 @@ export const users = pgTable("users", {
   handle: text("handle").notNull().unique(),
   displayName: text("display_name").notNull(),
   discordId: text("discord_id").unique(),
+  /**
+   * Optional scrypt hash — an alternative to a passkey, not a replacement.
+   *
+   * Passkeys are bound to the device that made them, so a trader who enrolled one on a
+   * desktop had no way into their account from a phone. A password travels.
+   */
+  passwordHash: text("password_hash"),
   role: text("role", { enum: ["user", "mod", "admin"] })
     .notNull()
     .default("user"),
