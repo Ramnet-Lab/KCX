@@ -4,6 +4,7 @@ import {
   FILL_BY_CHOICES,
   FILL_BY_DEFAULT_HOURS,
   priceVsBaselinePct,
+  referencePrice,
   type OrderSide,
   type TickerEntry,
 } from "@kcx/shared";
@@ -68,9 +69,10 @@ export function OrderModal({ open, seed, entries, signedIn, onClose, onPlaced }:
     setCommodityId(seed.commodityId ?? null);
     setPick(seed.commodityId != null ? (byId.get(seed.commodityId)?.name ?? "") : "");
     setQuantity(seed.quantityScu != null ? String(seed.quantityScu) : "");
-    // Default the price to the relevant NPC reference so the field is never empty-hostile.
+    // Default the price to the market reference so the field is never empty-hostile: the
+    // player mark once one exists, the side-appropriate NPC edge before that.
     const e = seed.commodityId != null ? byId.get(seed.commodityId) : undefined;
-    const ref = seed.pricePerScu ?? ((seed.side ?? "buy") === "buy" ? e?.effectiveBuy : e?.effectiveSell) ?? null;
+    const ref = seed.pricePerScu ?? (e ? referencePrice(e, seed.side ?? "buy") : null);
     setPrice(ref != null ? String(Math.round(ref)) : "");
     setMinFill("");
     setNotes("");
@@ -268,7 +270,7 @@ export function OrderModal({ open, seed, entries, signedIn, onClose, onPlaced }:
                       const match = byLabel.get(e.target.value);
                       setCommodityId(match?.commodityId ?? null);
                       if (match) {
-                        const ref = side === "buy" ? match.effectiveBuy : match.effectiveSell;
+                        const ref = referencePrice(match, side);
                         if (ref != null && !price) setPrice(String(Math.round(ref)));
                       }
                     }}

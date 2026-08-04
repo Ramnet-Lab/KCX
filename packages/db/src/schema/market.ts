@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   bigserial,
   boolean,
   index,
@@ -127,8 +128,50 @@ export const commodityReferencePoints = pgTable(
     /** How many non-excluded prints fed the mark (0 = pure NPC baseline). */
     printCount: integer("print_count").notNull().default(0),
   },
-  (t) => [primaryKey({ columns: [t.commodityId, t.capturedAt] })],
+  (t) => [
+    primaryKey({ columns: [t.commodityId, t.capturedAt] }),
+    // The PK leads with commodity_id, so any query filtering on time alone (the ticker's
+    // "24h ago" lookup, the index rebuild's tick list) was a full seq scan + sort.
+    index("reference_points_time").on(t.capturedAt),
+  ],
 );
+
+/**
+ * Current market state per commodity — the ticker's only read.
+ *
+ * Everything here is derivable from commodity_reference_points and trade_prints, but
+ * deriving it meant three DISTINCT ON scans over the entire history on every page load and
+ * every settlement. This table is 200-odd rows and is written by BOTH paths that can move a
+ * price: the 30-minute poll and a confirmed fill.
+ */
+export const commodityMarksLatest = pgTable("commodity_marks_latest", {
+  commodityId: integer("commodity_id")
+    .primaryKey()
+    .references(() => commodities.id),
+  /** NPC baseline, refreshed every poll — the seed price and the chart's reference line. */
+  bestSell: numeric("best_sell", { precision: 12, scale: 2 }),
+  bestBuy: numeric("best_buy", { precision: 12, scale: 2 }),
+  sellTerminals: integer("sell_terminals").notNull().default(0),
+  buyTerminals: integer("buy_terminals").notNull().default(0),
+  /**
+   * The KCX mark. Null until this commodity has ever printed — after that it is a player
+   * number and the baseline never reclaims it. See queries/mark.ts for the ladder.
+   */
+  markPrice: numeric("mark_price", { precision: 14, scale: 2 }),
+  /** Last qualifying print, kept forever so the mark survives a quiet week. */
+  lastPrice: bigint("last_price", { mode: "number" }),
+  lastTradedAt: timestamp("last_traded_at", { withTimezone: true }),
+  /** Qualifying activity inside the mark window — drives the "thin market" flag. */
+  windowVolumeScu: bigint("window_volume_scu", { mode: "number" }).notNull().default(0),
+  windowPrintCount: integer("window_print_count").notNull().default(0),
+  /**
+   * Distinct counterparty PAIRS in the window. One pair trading with itself repeatedly is
+   * the cheapest way to fake a market, so the count of pairs — not of prints — is what
+   * tells a reader whether a price means anything.
+   */
+  windowPairs: integer("window_pairs").notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 /**
  * NPC-baseline OHLC per commodity per bucket, derived from commodity_reference_points.

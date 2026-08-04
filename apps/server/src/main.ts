@@ -25,6 +25,7 @@ import { INGEST_INTERVAL_MINUTES } from "@kcx/shared";
 import { sql } from "drizzle-orm";
 import { PgBoss } from "pg-boss";
 import { rebuildCandlesSince } from "./jobs/candles";
+import { rebuildIndexSince } from "./jobs/index-points";
 import { checkGameVersion } from "./jobs/game-version";
 import { ingestPrices } from "./jobs/ingest-prices";
 import { ensureSnapshotInfra } from "./jobs/partitions";
@@ -68,9 +69,51 @@ async function main() {
     ws.broadcastTicker({ at: new Date().toISOString(), entries, indexLatest: idx });
   };
 
+  /**
+   * Settlements arrive one NOTIFY at a time, but the work each one triggers — rebuild
+   * candles, rebuild indices, recompute and broadcast the whole ticker — is expensive and
+   * almost entirely shared between two fills a second apart. Coalesce into a trailing
+   * window, with a ceiling so a steady stream of trades still refreshes regularly instead
+   * of pushing the flush out forever.
+   */
+  const SETTLE_DEBOUNCE_MS = 400;
+  const SETTLE_MAX_WAIT_MS = 3_000;
+  let settleTimer: NodeJS.Timeout | null = null;
+  let settleDeadline = 0;
+  let touched = new Set<number>();
+
+  const flushPriceMoves = async () => {
+    settleTimer = null;
+    settleDeadline = 0;
+    const commodities = touched;
+    touched = new Set();
+    try {
+      // Widened a little past the current bucket so a fill that lands either side of an
+      // hour boundary repaints the bucket it actually belongs to.
+      const from = new Date(Date.now() - 2 * 3_600_000);
+      if (commodities.size === 0 || commodities.size > 8) {
+        await rebuildCandlesSince(from);
+      } else {
+        for (const id of commodities) await rebuildCandlesSince(from, id);
+      }
+      await rebuildIndexSince(from);
+    } catch (err) {
+      console.error("[settle] derived series rebuild failed:", err instanceof Error ? err.message : err);
+    }
+    await broadcastTicker().catch((err) => console.error("[ticker] broadcast failed:", err));
+  };
+
+  const onPriceMoved = (commodityId: number | null) => {
+    if (commodityId != null) touched.add(commodityId);
+    const now = Date.now();
+    if (settleDeadline === 0) settleDeadline = now + SETTLE_MAX_WAIT_MS;
+    if (settleTimer) clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => void flushPriceMoves(), Math.max(0, Math.min(SETTLE_DEBOUNCE_MS, settleDeadline - now)));
+  };
+
   // Order-book changes from the web process arrive over Postgres NOTIFY and go straight out
   // to connected clients; settlements also refresh the price ticker on the spot.
-  const stopMarketFeed = await startMarketFeed(connectionString, ws, broadcastTicker);
+  const stopMarketFeed = await startMarketFeed(connectionString, ws, onPriceMoved);
 
   const boss = new PgBoss({ connectionString, schema: "pgboss" });
   boss.on("error", (err: Error) => console.error("[pg-boss]", err));
@@ -145,6 +188,7 @@ async function main() {
 
   const shutdown = async (signal: string) => {
     console.log(`[main] ${signal} — shutting down`);
+    if (settleTimer) clearTimeout(settleTimer);
     await stopMarketFeed().catch(() => {});
     await ws.close().catch(() => {});
     await boss.stop({ graceful: true, timeout: 15_000 }).catch(() => {});

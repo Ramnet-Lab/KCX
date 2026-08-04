@@ -1,9 +1,22 @@
-import { commodities, getDb, locations, referenceCandles, terminalPricesLatest, terminals } from "@kcx/db";
+import {
+  commodities,
+  commodityMarksLatest,
+  commodityTape,
+  getDb,
+  locations,
+  MARK_CONFIDENT_PAIRS,
+  MARK_WINDOW_HOURS,
+  referenceCandles,
+  terminalPricesLatest,
+  terminals,
+  type TapePrint,
+} from "@kcx/db";
 import { and, desc, eq } from "drizzle-orm";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ReferenceChart, type CandlePoint } from "@/components/reference-chart";
+import { TapePanel } from "@/components/tape-panel";
 import { fmtAuec, fmtScu, timeAgo } from "@/lib/format";
 
 // Live market data: never prerender at build time, when the database is empty.
@@ -83,7 +96,7 @@ export default async function CommodityPage({ params }: Props) {
     }));
   };
 
-  const [prices, paths, candles1h, candles1d] = await Promise.all([
+  const [prices, paths, candles1h, candles1d, mark, tape] = await Promise.all([
     db
       .select({
         terminalName: terminals.name,
@@ -101,7 +114,17 @@ export default async function CommodityPage({ params }: Props) {
     locationPaths(),
     loadCandles("1h", 24 * 14), // two weeks of hourly
     loadCandles("1d", 365),
+    db
+      .select()
+      .from(commodityMarksLatest)
+      .where(eq(commodityMarksLatest.commodityId, commodity.id))
+      .then((rows) => rows[0] ?? null),
+    commodityTape(db, commodity.id, 50).catch((): TapePrint[] => []),
   ]);
+
+  const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? "http://localhost:4000";
+  const markPrice = mark?.markPrice != null ? Number(mark.markPrice) : null;
+  const windowPairs = mark?.windowPairs ?? 0;
 
   const val = (s: string | null) => (s ? Number(s) : 0);
   const sellers = prices.filter((p) => val(p.priceSell) > 0).sort((a, b) => val(b.priceSell) - val(a.priceSell));
@@ -176,7 +199,40 @@ export default async function CommodityPage({ params }: Props) {
           </span>
         )}
       </div>
-      <ReferenceChart candles1h={candles1h} candles1d={candles1d} />
+      {/*
+        Where this commodity's headline price comes from. Worth stating outright: the NPC
+        baseline is a seed, and after the first fill the number above the chart is set by
+        traders, not by terminals.
+      */}
+      <div className="mb-4 flex flex-wrap items-baseline gap-x-6 gap-y-1 rounded border border-line bg-panel px-3 py-2">
+        <span className="text-xs uppercase tracking-wider text-ink-faint">Mark</span>
+        <span className={`num text-lg ${markPrice != null ? "text-accent" : "text-ink"}`}>
+          {markPrice != null ? fmtAuec(String(markPrice)) : fmtAuec(mark?.bestSell ?? null)}
+        </span>
+        {markPrice != null ? (
+          <span className="text-xs text-ink-dim">
+            player-set · {(mark?.windowPrintCount ?? 0).toLocaleString()} print
+            {(mark?.windowPrintCount ?? 0) === 1 ? "" : "s"} from {windowPairs} pair
+            {windowPairs === 1 ? "" : "s"} in {MARK_WINDOW_HOURS}h
+            {windowPairs < MARK_CONFIDENT_PAIRS && (
+              <span className="ml-2 rounded bg-danger/15 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-danger">
+                THIN
+              </span>
+            )}
+          </span>
+        ) : (
+          <span className="text-xs text-ink-faint">
+            NPC seed price — no player trades yet. The first settled trade takes this off the terminal price.
+          </span>
+        )}
+      </div>
+      <ReferenceChart
+        commodityId={commodity.id}
+        candles1h={candles1h}
+        candles1d={candles1d}
+        wsUrl={wsUrl}
+      />
+      <TapePanel commodityId={commodity.id} initial={tape} wsUrl={wsUrl} />
       <div className="grid gap-6 lg:grid-cols-2">
         <section>
           <h2 className="mb-2 text-sm font-bold text-up">Sell to terminal — best payout first</h2>

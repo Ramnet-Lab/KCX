@@ -10,8 +10,11 @@ import { sql } from "drizzle-orm";
  * deduped to changed rows only, so aggregating it per capture would mis-state the
  * market-wide best whenever only some terminals changed.)
  */
-export async function rebuildCandlesSince(since: Date): Promise<void> {
+export async function rebuildCandlesSince(since: Date, commodityId?: number): Promise<void> {
   const db = getDb();
+  // A settlement moves exactly one commodity; rebuilding all 200 to repaint one bucket
+  // would put a full-table pass on the latency path of every confirmed trade.
+  const only = commodityId != null ? sql` AND commodity_id = ${commodityId}` : sql``;
   for (const period of ["1h", "1d"] as const) {
     const trunc = period === "1h" ? "hour" : "day";
     await db.execute(sql`
@@ -38,7 +41,7 @@ export async function rebuildCandlesSince(since: Date): Promise<void> {
              FILTER (WHERE coalesce(market_price, best_sell) IS NOT NULL))[1]                      AS mkt_close,
           count(*)                                                                                 AS samples
         FROM commodity_reference_points
-        WHERE captured_at >= date_trunc(${sql.raw(`'${trunc}'`)}, ${since}::timestamptz AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+        WHERE captured_at >= date_trunc(${sql.raw(`'${trunc}'`)}, ${since}::timestamptz AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'${only}
         GROUP BY commodity_id, bucket_start
       )
       INSERT INTO reference_candles

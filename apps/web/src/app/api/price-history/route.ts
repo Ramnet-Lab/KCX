@@ -4,8 +4,13 @@ import { NextResponse } from "next/server";
 
 /**
  * GET /api/price-history?ids=13,35&days=90
- * Hourly best-sell close per requested commodity (from reference_candles 1h), for
- * client-side portfolio valuation. Capped at 50 ids; unknown ids simply return no rows.
+ * Hourly mark close per requested commodity (from reference_candles 1h), for client-side
+ * portfolio valuation. Capped at 50 ids; unknown ids simply return no rows.
+ *
+ * Values the history at the MARK, falling back to the NPC close for buckets recorded before
+ * the mark existed. It previously read sell_close outright, so a portfolio chart valued the
+ * past at terminal prices and its final live point at the player mark — the line took a step
+ * at "now" that was an artefact of two different valuation bases, not a price move.
  */
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -21,10 +26,10 @@ export async function GET(request: Request) {
     const result = await getDb().execute<{ commodity_id: number; t: string; v: string }>(sql`
       SELECT commodity_id,
              extract(epoch FROM bucket_start)::bigint::text AS t,
-             sell_close::text AS v
+             coalesce(mkt_close, sell_close)::text AS v
       FROM reference_candles
       WHERE period = '1h'
-        AND sell_close IS NOT NULL
+        AND coalesce(mkt_close, sell_close) IS NOT NULL
         AND commodity_id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
         AND bucket_start >= now() - make_interval(days => ${days})
       ORDER BY bucket_start ASC

@@ -1,7 +1,16 @@
 /** Typed socket.io event contracts shared by apps/server and apps/web. */
 
+import type { OrderSide } from "./orders";
+
 /** Which side of the market is setting a displayed price. */
 export type PriceSource = "npc" | "player";
+
+/**
+ * What the change percentage is actually measured against. A young dataset has nothing 24h
+ * old to compare with, and quietly relabelling "since we started collecting" as "24h" makes
+ * the number — which the market wall SORTS by — wrong in a way nobody can see.
+ */
+export type ChangeBasis = "24h" | "open";
 
 export type TickerEntry = {
   commodityId: number;
@@ -13,37 +22,38 @@ export type TickerEntry = {
   bestSell: number | null;
   /** Cheapest NPC buy-from price right now. */
   bestBuy: number | null;
-  /** KCX mark — VWAP of recent player fills. Null until players actually trade. */
-  markPrice: number | null;
   /**
-   * What a trader can actually get / pay, taking the better of the player market and the
-   * NPC baseline: highest payout to sell, lowest cost to buy.
+   * KCX mark — the player price. Null until this commodity has ever had a qualifying fill;
+   * once it has, the NPC baseline never takes the headline back.
    */
-  effectiveSell: number | null;
-  effectiveBuy: number | null;
-  sellSource: PriceSource;
-  buySource: PriceSource;
-  /** % change of effectiveSell vs ~24h ago; null until enough history exists. */
-  change24hPct: number | null;
+  markPrice: number | null;
+  /** Most recent qualifying print, kept indefinitely so a quiet week doesn't reset the mark. */
+  lastPrice: number | null;
+  lastTradedAt: string | null;
+  /** The headline number on the tile: the mark if there is one, else the NPC baseline. */
+  price: number | null;
+  priceSource: PriceSource;
+  /** Qualifying player activity in the mark window. */
+  windowVolumeScu: number;
+  windowPrintCount: number;
+  /** Distinct counterparty pairs — the honest measure of whether a price means anything. */
+  windowPairs: number;
+  /** Player-priced, but on too few distinct relationships to be worth much. */
+  thin: boolean;
+  /** % change of `price` vs the basis below; null until any history exists. */
+  changePct: number | null;
+  changeBasis: ChangeBasis;
 };
 
 /**
- * A player fill only supersedes the NPC baseline when it is genuinely better for the trader.
- * Selling: take the higher price. Buying: take the lower.
+ * The reference price to pre-fill an order form with.
+ *
+ * Once a commodity has a player mark, that IS the market and both sides quote off it. Before
+ * then there is no single price — only the two NPC edges — so the side matters.
  */
-export function resolveEffectivePrices(
-  bestSell: number | null,
-  bestBuy: number | null,
-  markPrice: number | null,
-): Pick<TickerEntry, "effectiveSell" | "effectiveBuy" | "sellSource" | "buySource"> {
-  const playerWinsSell = markPrice != null && (bestSell == null || markPrice > bestSell);
-  const playerWinsBuy = markPrice != null && (bestBuy == null || markPrice < bestBuy);
-  return {
-    effectiveSell: playerWinsSell ? markPrice : bestSell,
-    effectiveBuy: playerWinsBuy ? markPrice : bestBuy,
-    sellSource: playerWinsSell ? "player" : "npc",
-    buySource: playerWinsBuy ? "player" : "npc",
-  };
+export function referencePrice(entry: TickerEntry, side: OrderSide): number | null {
+  if (entry.markPrice != null) return entry.markPrice;
+  return side === "buy" ? entry.bestBuy : entry.bestSell;
 }
 
 import type { IndexLatest } from "./sectors";

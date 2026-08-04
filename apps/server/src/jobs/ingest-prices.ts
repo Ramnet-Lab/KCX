@@ -1,4 +1,4 @@
-import { commodities, fillsCte, getDb, markExpr, terminalPricesLatest, terminals, uexPriceSnapshots } from "@kcx/db";
+import { captureAllMarks, commodities, getDb, terminalPricesLatest, terminals, uexPriceSnapshots } from "@kcx/db";
 import { uexPriceRow } from "@kcx/shared";
 import { sql } from "drizzle-orm";
 import { audit, fetchUexRows, int, num, parseRows } from "../lib/uex";
@@ -6,6 +6,13 @@ import { rebuildCandlesSince } from "./candles";
 import { rebuildIndexSince } from "./index-points";
 import { ensureSnapshotInfra } from "./partitions";
 import { syncMasterData } from "./sync-master";
+
+/**
+ * Fraction of the currently-held terminal/commodity pairs a feed must cover before we
+ * trust it to tell us which pairs have disappeared. A real delisting wave moves a few
+ * percent; anything that claims a third of the market vanished at once is a bad response.
+ */
+const FEED_COMPLETENESS_FLOOR = 0.8;
 
 /**
  * The 30-minute poll: /commodities_prices_all → (in ONE transaction, serialized by an
@@ -165,43 +172,30 @@ export async function ingestPrices(): Promise<{ upserted: number; snapshotted: n
 
       // The feed is a full dump: pairs absent from it no longer exist in-game (terminal
       // removed, commodity delisted) and must not keep pinning "best price" aggregates.
-      // Guarded so a bogus near-empty feed can never wipe the table.
-      if (latestValues.length >= 500) {
+      //
+      // The guard is RELATIVE to what we already hold, not an absolute row count. With a
+      // flat `>= 500` floor and ~2,600 live pairs, a genuinely truncated UEX response of,
+      // say, 600 rows sailed through and deleted ~2,000 pairs — collapsing best_sell and
+      // best_buy for most commodities, and baking that into a reference point, a candle and
+      // an index point that no later capture would ever correct.
+      const [{ n: heldText } = { n: "0" }] = (
+        await tx.execute<{ n: string }>(sql`SELECT count(*)::text AS n FROM terminal_prices_latest`)
+      ).rows;
+      const held = Number(heldText);
+      const covers = held === 0 ? 1 : latestValues.length / held;
+      if (covers >= FEED_COMPLETENESS_FLOOR) {
         await tx.execute(sql`DELETE FROM terminal_prices_latest WHERE captured_at <> ${capturedAt}`);
+      } else {
+        console.warn(
+          `[ingest] feed covered only ${Math.round(covers * 100)}% of the ${held} pairs held ` +
+            `(${latestValues.length} rows) — skipping the vanished-pair sweep rather than trusting a partial dump`,
+        );
       }
 
       // Per-commodity baseline from the COMPLETE, freshly-cleaned latest state, plus the
-      // KCX mark: the volume-weighted price of player fills in the trailing window, falling
-      // back to the NPC baseline when nobody has traded. Only fills move it — expired
-      // orders never reach trade_prints, so an unfilled listing cannot touch the market.
-      await tx.execute(sql`
-        WITH baseline AS (
-          SELECT
-            commodity_id,
-            max(nullif(price_sell, 0)) AS best_sell,
-            min(nullif(price_buy, 0))  AS best_buy,
-            count(*) FILTER (WHERE nullif(price_sell, 0) IS NOT NULL) AS sell_terminals,
-            count(*) FILTER (WHERE nullif(price_buy, 0) IS NOT NULL)  AS buy_terminals
-          FROM terminal_prices_latest
-          GROUP BY commodity_id
-        ),
-        fills AS (${fillsCte(capturedAt)})
-        INSERT INTO commodity_reference_points
-          (commodity_id, captured_at, best_sell, best_buy, sell_terminals, buy_terminals, market_price, print_count)
-        SELECT
-          b.commodity_id,
-          ${capturedAt},
-          b.best_sell,
-          b.best_buy,
-          b.sell_terminals,
-          b.buy_terminals,
-          -- Volume-weighted blend between the NPC baseline and the player VWAP.
-          ${markExpr("b.best_sell")},
-          coalesce(f.print_count, 0)
-        FROM baseline b
-        LEFT JOIN fills f ON f.commodity_id = b.commodity_id
-        ON CONFLICT (commodity_id, captured_at) DO NOTHING
-      `);
+      // KCX mark. Shared with the settlement path so the two writers can't drift — see
+      // packages/db/src/queries/market-point.ts.
+      await captureAllMarks(tx, capturedAt);
     });
 
     // Widened window: if a prior run crashed between commit and rebuild, any bucket in the

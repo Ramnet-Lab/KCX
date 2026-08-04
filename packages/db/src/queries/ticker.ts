@@ -1,17 +1,21 @@
-import { resolveEffectivePrices, type TickerEntry } from "@kcx/shared";
+import type { ChangeBasis, TickerEntry } from "@kcx/shared";
 import { sql } from "drizzle-orm";
 import type { Db } from "../client";
-import { fillsCte, markExpr } from "./mark";
+import { MARK_CONFIDENT_PAIRS } from "./mark";
 
 /**
- * Ticker payload: every tradable commodity's current prices plus its 24h delta.
+ * Ticker payload: every tradable commodity's current price and its change.
  *
- * Displayed prices take the BETTER of the player market and the NPC baseline — a filled
- * player order supersedes the terminal price only when it actually beats it. The 24h
- * comparison uses the same effective basis so the delta matches what's on screen.
+ * Reads `commodity_marks_latest` — one row per commodity, ~200 rows — rather than deriving
+ * the current state from history. The previous version ran three DISTINCT ON passes over
+ * all of `commodity_reference_points` on every home page load AND every settlement; with 48
+ * captures a day across 200 commodities that table gains ~3.6M rows a year, and the "24h
+ * ago" lookup was a plain seq scan and sort because the PK leads with commodity_id.
  *
- * "24h ago" is the newest reference point at least 24h old; falls back to the oldest point
- * available once at least 6h of spread exists (so early-life deltas aren't noise).
+ * The comparison point comes from the 1h candles, which are already keyed
+ * (commodity_id, period, bucket_start) and so answer "where was this a day ago" from an
+ * index. Where a commodity has under a day of history the comparison falls back to its
+ * oldest bucket and says so — see ChangeBasis.
  */
 export async function tickerEntries(db: Db): Promise<TickerEntry[]> {
   const result = await db.execute<{
@@ -23,56 +27,39 @@ export async function tickerEntries(db: Db): Promise<TickerEntry[]> {
     best_sell: string | null;
     best_buy: string | null;
     mark_price: string | null;
-    print_count: number;
-    prev_sell: string | null;
-    prev_mark: string | null;
+    last_price: string | null;
+    last_traded_at: Date | string | null;
+    window_volume_scu: string;
+    window_print_count: number;
+    window_pairs: number;
+    prev_day: string | null;
+    prev_open: string | null;
   }>(sql`
-    WITH fills AS (${fillsCte()}),
-    latest_raw AS (
-      SELECT DISTINCT ON (commodity_id)
-        commodity_id, captured_at, best_sell, best_buy
-      FROM commodity_reference_points
-      ORDER BY commodity_id, captured_at DESC
-    ),
-    -- Recompute the mark live rather than reading the stored value: a settlement must move
-    -- the price immediately, not at the next 30-minute poll.
-    latest AS (
-      SELECT
-        l.commodity_id, l.captured_at, l.best_sell, l.best_buy,
-        ${markExpr("l.best_sell")} AS market_price,
-        coalesce(f.print_count, 0) AS print_count
-      FROM latest_raw l
-      LEFT JOIN fills f ON f.commodity_id = l.commodity_id
-    ),
-    day_ago AS (
-      SELECT DISTINCT ON (commodity_id)
-        commodity_id, captured_at, best_sell, market_price
-      FROM commodity_reference_points
-      WHERE captured_at <= now() - interval '24 hours'
-      ORDER BY commodity_id, captured_at DESC
-    ),
-    oldest AS (
-      SELECT DISTINCT ON (commodity_id)
-        commodity_id, captured_at, best_sell, market_price
-      FROM commodity_reference_points
-      ORDER BY commodity_id, captured_at ASC
-    )
     SELECT
-      c.id            AS commodity_id,
-      c.slug, c.code, c.name,
-      c.is_illegal,
-      l.best_sell     AS best_sell,
-      l.best_buy      AS best_buy,
-      -- market_price equals the baseline when nobody has traded; only surface it as a
-      -- player price once real prints exist behind it.
-      CASE WHEN l.print_count > 0 THEN l.market_price END AS mark_price,
-      l.print_count,
-      coalesce(d.best_sell, CASE WHEN l.captured_at - o.captured_at >= interval '6 hours' THEN o.best_sell END) AS prev_sell,
-      coalesce(d.market_price, CASE WHEN l.captured_at - o.captured_at >= interval '6 hours' THEN o.market_price END) AS prev_mark
+      c.id AS commodity_id,
+      c.slug, c.code, c.name, c.is_illegal,
+      m.best_sell::text,
+      m.best_buy::text,
+      m.mark_price::text,
+      m.last_price::text,
+      m.last_traded_at,
+      m.window_volume_scu::text,
+      m.window_print_count,
+      m.window_pairs,
+      -- Newest 1h close at least 24h old.
+      (SELECT rc.mkt_close::text
+         FROM reference_candles rc
+        WHERE rc.commodity_id = c.id AND rc.period = '1h'
+          AND rc.bucket_start <= now() - interval '24 hours'
+          AND rc.mkt_close IS NOT NULL
+        ORDER BY rc.bucket_start DESC LIMIT 1) AS prev_day,
+      -- Oldest close we hold at all, for the "since open" fallback.
+      (SELECT rc.mkt_close::text
+         FROM reference_candles rc
+        WHERE rc.commodity_id = c.id AND rc.period = '1h' AND rc.mkt_close IS NOT NULL
+        ORDER BY rc.bucket_start ASC LIMIT 1) AS prev_open
     FROM commodities c
-    JOIN latest l ON l.commodity_id = c.id
-    LEFT JOIN day_ago d ON d.commodity_id = c.id
-    LEFT JOIN oldest o ON o.commodity_id = c.id
+    JOIN commodity_marks_latest m ON m.commodity_id = c.id
     WHERE c.is_tradable
     ORDER BY c.name
   `);
@@ -83,18 +70,21 @@ export async function tickerEntries(db: Db): Promise<TickerEntry[]> {
     const bestSell = num(r.best_sell);
     const bestBuy = num(r.best_buy);
     const markPrice = num(r.mark_price);
-    const effective = resolveEffectivePrices(bestSell, bestBuy, markPrice);
 
-    // Compare like with like: previous effective sell, using the same better-of rule.
-    const prevSell = num(r.prev_sell);
-    const prevMark = num(r.prev_mark);
-    const prevEffective =
-      prevMark != null && (prevSell == null || prevMark > prevSell) ? prevMark : prevSell;
-    const current = effective.effectiveSell;
-    const change =
-      current != null && prevEffective != null && prevEffective > 0
-        ? ((current - prevEffective) / prevEffective) * 100
-        : null;
+    // The headline. A commodity that has traded is priced by its traders from then on; the
+    // NPC baseline keeps being polled but only as context and as the chart's reference line.
+    const price = markPrice ?? bestSell;
+    const priceSource = markPrice != null ? "player" : "npc";
+
+    const prevDay = num(r.prev_day);
+    const prevOpen = num(r.prev_open);
+    const basis: ChangeBasis = prevDay != null ? "24h" : "open";
+    const prev = prevDay ?? prevOpen;
+    const changePct =
+      price != null && prev != null && prev > 0 ? Math.round(((price - prev) / prev) * 10_000) / 100 : null;
+
+    const windowPairs = Number(r.window_pairs ?? 0);
+    const lastTradedAt = r.last_traded_at ? new Date(r.last_traded_at).toISOString() : null;
 
     return {
       commodityId: r.commodity_id,
@@ -105,8 +95,16 @@ export async function tickerEntries(db: Db): Promise<TickerEntry[]> {
       bestSell,
       bestBuy,
       markPrice,
-      ...effective,
-      change24hPct: change != null ? Math.round(change * 100) / 100 : null,
-    };
+      lastPrice: num(r.last_price),
+      lastTradedAt,
+      price,
+      priceSource,
+      windowVolumeScu: Number(r.window_volume_scu ?? 0),
+      windowPrintCount: Number(r.window_print_count ?? 0),
+      windowPairs,
+      thin: markPrice != null && windowPairs < MARK_CONFIDENT_PAIRS,
+      changePct,
+      changeBasis: basis,
+    } satisfies TickerEntry;
   });
 }

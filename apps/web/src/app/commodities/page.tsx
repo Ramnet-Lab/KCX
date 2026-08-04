@@ -1,5 +1,4 @@
-import { commodities, getDb, terminalPricesLatest } from "@kcx/db";
-import { resolveEffectivePrices } from "@kcx/shared";
+import { commodities, getDb, MARK_CONFIDENT_PAIRS, terminalPricesLatest } from "@kcx/db";
 import { eq, sql } from "drizzle-orm";
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -13,15 +12,19 @@ export const metadata: Metadata = {
 // Live market data: never prerender at build time, when the database is empty.
 export const dynamic = "force-dynamic";
 
-/** Latest player mark per commodity (only where real prints back it). */
-async function loadMarks(): Promise<Map<number, number>> {
-  const rows = await getDb().execute<{ commodity_id: number; mark: string | null }>(sql`
-    SELECT DISTINCT ON (commodity_id) commodity_id, market_price::text AS mark
-    FROM commodity_reference_points
-    WHERE print_count > 0
-    ORDER BY commodity_id, captured_at DESC
+type Mark = { price: number; pairs: number };
+
+/**
+ * Player mark per commodity. Null in the marks table means the commodity has never had a
+ * qualifying fill and is still on its NPC seed price — the row simply isn't in this map.
+ */
+async function loadMarks(): Promise<Map<number, Mark>> {
+  const rows = await getDb().execute<{ commodity_id: number; mark: string | null; pairs: number }>(sql`
+    SELECT commodity_id, mark_price::text AS mark, window_pairs AS pairs
+    FROM commodity_marks_latest
+    WHERE mark_price IS NOT NULL
   `);
-  return new Map(rows.rows.filter((r) => r.mark != null).map((r) => [r.commodity_id, Number(r.mark)]));
+  return new Map(rows.rows.map((r) => [r.commodity_id, { price: Number(r.mark), pairs: Number(r.pairs ?? 0) }]));
 }
 
 function loadRows() {
@@ -49,7 +52,7 @@ function loadRows() {
 
 export default async function CommoditiesPage() {
   let rows: Awaited<ReturnType<typeof loadRows>> = [];
-  let marks = new Map<number, number>();
+  let marks = new Map<number, Mark>();
   try {
     [rows, marks] = await Promise.all([loadRows(), loadMarks()]);
   } catch (err) {
@@ -62,7 +65,17 @@ export default async function CommoditiesPage() {
     .map((r) => {
       const npcSell = r.bestSell != null ? Number(r.bestSell) : null;
       const npcBuy = r.bestBuy != null ? Number(r.bestBuy) : null;
-      return { ...r, ...resolveEffectivePrices(npcSell, npcBuy, marks.get(r.id) ?? null) };
+      const mark = marks.get(r.id) ?? null;
+      return {
+        ...r,
+        npcSell,
+        npcBuy,
+        // Once a commodity has traded, the players set its price. The terminal numbers stay
+        // on the row as context rather than competing to be the headline.
+        price: mark?.price ?? npcSell,
+        priceSource: mark ? ("player" as const) : ("npc" as const),
+        thin: mark != null && mark.pairs < MARK_CONFIDENT_PAIRS,
+      };
     });
 
   if (traded.length === 0) {
@@ -90,8 +103,8 @@ export default async function CommoditiesPage() {
             <tr>
               <th className="px-3 py-2">Commodity</th>
               <th className="px-3 py-2">Kind</th>
-              <th className="px-3 py-2 text-right">Best sell-to</th>
-              <th className="px-3 py-2 text-right">Cheapest buy-from</th>
+              <th className="px-3 py-2 text-right">Mark</th>
+              <th className="px-3 py-2 text-right">NPC sell / buy</th>
               <th className="px-3 py-2 text-right">Sell / buy terms.</th>
               <th className="px-3 py-2 text-right">Updated</th>
             </tr>
@@ -111,17 +124,22 @@ export default async function CommoditiesPage() {
                   )}
                 </td>
                 <td className="px-3 py-2 text-ink-dim">{r.kind ?? "—"}</td>
-                <td className="num px-3 py-2 text-right text-up">
-                  {fmtAuec(r.effectiveSell)}
-                  {r.sellSource === "player" && (
-                    <span className="ml-1 text-[9px] text-accent" title="Player market beats the terminals">
+                <td className={`num px-3 py-2 text-right ${r.priceSource === "player" ? "text-accent" : "text-up"}`}>
+                  {fmtAuec(r.price != null ? String(r.price) : null)}
+                  {r.priceSource === "player" && (
+                    <span className="ml-1 text-[9px] text-accent" title="Set by player trades, not terminals">
                       PLR
                     </span>
                   )}
+                  {r.thin && (
+                    <span className="ml-1 text-[9px] text-danger" title="Too few distinct counterparties to be reliable">
+                      THIN
+                    </span>
+                  )}
                 </td>
-                <td className="num px-3 py-2 text-right text-ink">
-                  {fmtAuec(r.effectiveBuy)}
-                  {r.buySource === "player" && <span className="ml-1 text-[9px] text-accent">PLR</span>}
+                <td className="num px-3 py-2 text-right text-ink-dim">
+                  {fmtAuec(r.npcSell != null ? String(r.npcSell) : null)} /{" "}
+                  {fmtAuec(r.npcBuy != null ? String(r.npcBuy) : null)}
                 </td>
                 <td className="num px-3 py-2 text-right text-ink-dim">
                   {r.sellTerminals} / {r.buyTerminals}

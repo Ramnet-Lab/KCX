@@ -24,8 +24,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       kind: "contract",
       tradeId: id,
       commodityId: result.commodityId,
-      // A settlement writes a print, so the market price moves with it.
-      priceMoved: result.settled,
+      // A settlement writes a print, but a print quarantined by the integrity checks moves
+      // nothing — broadcasting it as a price move would make the tape's own rejections look
+      // like market activity.
+      priceMoved: result.priceMoved ?? false,
       participants: [result.ownerId, result.claimerId],
     });
     return NextResponse.json(result);

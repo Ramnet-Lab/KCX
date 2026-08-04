@@ -22,10 +22,39 @@ type Props = {
 
 const fmt = (n: number | null) => (n == null ? "—" : n.toLocaleString("en-US", { maximumFractionDigits: 0 }));
 
-function changeBadge(chg: number | null) {
+function changeBadge(entry: TickerEntry) {
+  const chg = entry.changePct;
   const color = chg == null ? "text-ink-faint" : chg > 0 ? "text-up" : chg < 0 ? "text-down" : "text-ink-dim";
   const text = chg == null ? "· · ·" : `${chg > 0 ? "▲" : chg < 0 ? "▼" : "•"} ${Math.abs(chg).toFixed(1)}%`;
-  return <span className={`num text-xs ${color}`}>{text}</span>;
+  // A young dataset has nothing 24h old to compare against. Saying "24h" anyway would be a
+  // quiet lie, and this number drives the wall's default sort.
+  const title = chg == null ? "Not enough history yet" : entry.changeBasis === "24h" ? "Change over 24h" : "Change since we started tracking this commodity";
+  return (
+    <span className={`num text-xs ${color}`} title={title}>
+      {text}
+      {chg != null && entry.changeBasis === "open" && <span className="ml-0.5 text-ink-faint">*</span>}
+    </span>
+  );
+}
+
+/** Small badge explaining where a tile's headline price came from. */
+function sourceBadge(entry: TickerEntry) {
+  if (entry.priceSource !== "player") return null;
+  return (
+    <>
+      <span className="text-[9px] font-bold text-accent" title="Set by settled player trades, not by terminals">
+        PLR
+      </span>
+      {entry.thin && (
+        <span
+          className="text-[9px] font-bold text-danger"
+          title={`Only ${entry.windowPairs} distinct counterparty pair${entry.windowPairs === 1 ? "" : "s"} behind this price`}
+        >
+          THIN
+        </span>
+      )}
+    </>
+  );
 }
 
 /** Market wall (presentational — live state comes from MarketDashboard): search, tile/list views, collections. */
@@ -58,11 +87,15 @@ export function TickerWall({ entries, lastUpdate, flash, onPlaceOrder }: Props) 
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
+    // Player-priced commodities first — they're the ones that are actually a market — then
+    // by movement. Ranking a purely NPC tile above a traded one on a bigger poll-to-poll
+    // wobble buries the thing a trader came here for.
     let list = [...entries].sort((a, b) => {
-      const am = Math.abs(a.change24hPct ?? 0);
-      const bm = Math.abs(b.change24hPct ?? 0);
+      if (a.priceSource !== b.priceSource) return a.priceSource === "player" ? -1 : 1;
+      const am = Math.abs(a.changePct ?? 0);
+      const bm = Math.abs(b.changePct ?? 0);
       if (bm !== am) return bm - am;
-      return (b.effectiveSell ?? 0) - (a.effectiveSell ?? 0);
+      return (b.price ?? 0) - (a.price ?? 0);
     });
     if (activeCollection) {
       const ids = new Set(activeCollection.commodityIds);
@@ -290,7 +323,10 @@ export function TickerWall({ entries, lastUpdate, flash, onPlaceOrder }: Props) 
       <div className="mb-3 flex items-baseline justify-between text-xs text-ink-faint">
         <span>
           {visible.length} of {entries.length} commodities
-          {activeCollection ? ` · ${activeCollection.name}` : ""} · sorted by 24h movement
+          {activeCollection ? ` · ${activeCollection.name}` : ""} · player-priced first, then by movement
+          {visible.some((e) => e.changeBasis === "open" && e.changePct != null) && (
+            <span className="ml-1 text-ink-faint">· * = since tracking began, not 24h</span>
+          )}
         </span>
         <span className={flash ? "text-accent" : ""}>
           {lastUpdate ? `live · updated ${new Date(lastUpdate).toLocaleTimeString()}` : "live feed connected on next poll"}
@@ -318,7 +354,7 @@ export function TickerWall({ entries, lastUpdate, flash, onPlaceOrder }: Props) 
               <div className="flex items-baseline justify-between gap-1">
                 <span className="text-xs font-bold tracking-wider text-ink-dim">{e.code}</span>
                 <span className="flex items-center gap-1">
-                  {changeBadge(e.change24hPct)}
+                  {changeBadge(e)}
                   <AssignButton commodityId={e.commodityId} />
                 </span>
               </div>
@@ -326,18 +362,18 @@ export function TickerWall({ entries, lastUpdate, flash, onPlaceOrder }: Props) 
                 {e.name}
                 {e.isIllegal && <span className="ml-1 align-middle text-[9px] font-bold text-danger">◆</span>}
               </div>
-              <div className="num mt-1 flex items-baseline gap-1 text-base text-up">
-                {fmt(e.effectiveSell)}
-                {e.sellSource === "player" && (
-                  <span className="text-[9px] font-bold text-accent" title="Player market beats the NPC terminal price">
-                    PLR
-                  </span>
-                )}
+              <div
+                className={`num mt-1 flex items-baseline gap-1 text-base ${
+                  e.priceSource === "player" ? "text-accent" : "text-up"
+                }`}
+              >
+                {fmt(e.price)}
+                {sourceBadge(e)}
               </div>
               <div className="flex items-center justify-between">
-                <span className="num text-xs text-ink-faint">
-                  buy {fmt(e.effectiveBuy)}
-                  {e.buySource === "player" && <span className="ml-0.5 text-accent">·plr</span>}
+                {/* NPC edges stay visible as context — they're the chart's reference line. */}
+                <span className="num text-xs text-ink-faint" title="NPC terminal sell-to / buy-from">
+                  npc {fmt(e.bestSell)}/{fmt(e.bestBuy)}
                 </span>
                 <TradeButtons commodityId={e.commodityId} compact />
               </div>
@@ -352,9 +388,9 @@ export function TickerWall({ entries, lastUpdate, flash, onPlaceOrder }: Props) 
               <tr>
                 <th className="px-3 py-2">Ticker</th>
                 <th className="px-3 py-2">Commodity</th>
-                <th className="px-3 py-2 text-right">Best sell</th>
-                <th className="px-3 py-2 text-right">Best buy</th>
-                <th className="px-3 py-2 text-right">24h</th>
+                <th className="px-3 py-2 text-right">Mark</th>
+                <th className="px-3 py-2 text-right">NPC sell / buy</th>
+                <th className="px-3 py-2 text-right">Change</th>
                 <th className="px-3 py-2 text-center">Trade</th>
                 <th className="px-3 py-2 text-right">★</th>
               </tr>
@@ -369,15 +405,18 @@ export function TickerWall({ entries, lastUpdate, flash, onPlaceOrder }: Props) 
                     </Link>
                     {e.isIllegal && <span className="ml-1 text-[9px] font-bold text-danger">◆</span>}
                   </td>
-                  <td className="num px-3 py-1.5 text-right text-up">
-                    {fmt(e.effectiveSell)}
-                    {e.sellSource === "player" && <span className="ml-1 text-[9px] text-accent">PLR</span>}
+                  <td
+                    className={`num px-3 py-1.5 text-right ${e.priceSource === "player" ? "text-accent" : "text-up"}`}
+                  >
+                    <span className="inline-flex items-baseline gap-1">
+                      {fmt(e.price)}
+                      {sourceBadge(e)}
+                    </span>
                   </td>
                   <td className="num px-3 py-1.5 text-right text-ink-dim">
-                    {fmt(e.effectiveBuy)}
-                    {e.buySource === "player" && <span className="ml-1 text-[9px] text-accent">PLR</span>}
+                    {fmt(e.bestSell)} / {fmt(e.bestBuy)}
                   </td>
-                  <td className="px-3 py-1.5 text-right">{changeBadge(e.change24hPct)}</td>
+                  <td className="px-3 py-1.5 text-right">{changeBadge(e)}</td>
                   <td className="px-3 py-1.5">
                     <span className="flex justify-center">
                       <TradeButtons commodityId={e.commodityId} />

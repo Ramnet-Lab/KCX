@@ -9,7 +9,10 @@ import {
   userHoldings,
   users,
 } from "../schema/orders";
+import type { PrintExclusion } from "../schema/orders";
 import { MAX_OPEN_ESCROWS, committedAuecSql, committedScuSql } from "./collateral";
+import { refreshCommodityMark } from "./market-point";
+import { judgePrint } from "./print-integrity";
 
 /** Default escrow window — long enough to meet in-game, short enough not to squat on cargo. */
 export const ESCROW_HOURS = 24;
@@ -17,15 +20,22 @@ export const ESCROW_HOURS = 24;
 /** After you release a contract, you can't immediately re-lock the same order. */
 export const RECLAIM_COOLDOWN_MINUTES = 30;
 
-/** Prints beyond this band vs the NPC reference are quarantined from charts (kept for audit). */
-const OUTLIER_LOW = 0.25;
-const OUTLIER_HIGH = 3.0;
-
 export type ClaimResult =
   | { ok: true; tradeId: string; ownerId: string; commodityId: number }
   | { ok: false; error: string };
 export type ContractResult =
-  | { ok: true; status: string; settled: boolean; ownerId: string; claimerId: string; commodityId: number }
+  | {
+      ok: true;
+      status: string;
+      settled: boolean;
+      /** True only when the fill actually moved the mark — an excluded print does not. */
+      priceMoved?: boolean;
+      printExcluded?: boolean;
+      printExclusionReason?: PrintExclusion | null;
+      ownerId: string;
+      claimerId: string;
+      commodityId: number;
+    }
   | { ok: false; error: string };
 
 /**
@@ -302,32 +312,31 @@ export async function resolveContract(
       .set({ auecBalance: sql`${users.auecBalance} - ${value}` })
       .where(eq(users.id, cargoTo));
 
-    // Quarantine implausible prices from the charts (retained for audit). Many raw ores are
-    // only bought by terminals, never sold, so the side-specific reference can be NULL —
-    // fall back through the other side and the current mark rather than skipping the check,
-    // which would leave exactly those commodities wide open to a wash print.
-    const refRows = await tx.execute<{ best_sell: string | null; best_buy: string | null; mark: string | null }>(sql`
-      SELECT best_sell::text, best_buy::text, market_price::text AS mark
-      FROM commodity_reference_points
-      WHERE commodity_id = ${trade.commodityId} ORDER BY captured_at DESC LIMIT 1
-    `);
-    const row = refRows.rows[0];
-    const sideRef = trade.side === "buy" ? row?.best_buy : row?.best_sell;
-    const refNum = [sideRef, row?.best_sell, row?.best_buy, row?.mark]
-      .map((v) => (v != null ? Number(v) : null))
-      .find((v): v is number => v != null && v > 0);
-    const ratio = refNum != null ? trade.pricePerScu / refNum : null;
-    const excluded = ratio != null && (ratio < OUTLIER_LOW || ratio > OUTLIER_HIGH);
-
-    await tx.insert(tradePrints).values({
-      orderId: trade.orderId,
+    // Decide whether this print is allowed to move the market. Excluded prints are still
+    // written — they stay on the public tape carrying their reason — they simply don't feed
+    // the mark. See queries/print-integrity.ts for why price alone isn't a sufficient test.
+    const verdict = await judgePrint(tx, {
       commodityId: trade.commodityId,
-      seasonId: trade.seasonId,
       side: trade.side,
       pricePerScu: trade.pricePerScu,
       quantityScu: trade.quantityScu,
-      excluded,
-      exclusionReason: excluded ? "outlier" : null,
+      buyerId: cargoTo,
+      sellerId: cargoFrom,
+    });
+
+    await tx.insert(tradePrints).values({
+      orderId: trade.orderId,
+      tradeId: trade.id,
+      commodityId: trade.commodityId,
+      seasonId: trade.seasonId,
+      side: trade.side,
+      buyerId: cargoTo,
+      sellerId: cargoFrom,
+      pricePerScu: trade.pricePerScu,
+      quantityScu: trade.quantityScu,
+      excluded: verdict.excluded,
+      exclusionReason: verdict.reason,
+      executedAt: now,
     });
 
     const [order] = await tx.select().from(orders).where(eq(orders.id, trade.orderId)).for("update");
@@ -347,7 +356,12 @@ export async function resolveContract(
       orderId: trade.orderId,
       actorId: opts.userId,
       type: "filled",
-      data: { tradeId: trade.id, quantityScu: trade.quantityScu, printExcluded: excluded },
+      data: {
+        tradeId: trade.id,
+        quantityScu: trade.quantityScu,
+        printExcluded: verdict.excluded,
+        printExclusionReason: verdict.reason,
+      },
     });
 
     await tx
@@ -356,10 +370,20 @@ export async function resolveContract(
       .where(eq(trades.id, trade.id));
     await tx.insert(tradeEvents).values({ tradeId: trade.id, actorId: opts.userId, type: "settled", data: { value } });
 
+    // Move the market in the same transaction as the fill. Writing a reference point at
+    // `now` (rather than waiting for the next capture) is what puts the trade into the
+    // current candle bucket, so the chart moves with the tile instead of half an hour later.
+    await refreshCommodityMark(tx, trade.commodityId, now);
+
     return {
       ok: true as const,
       status: "settled",
       settled: true,
+      // A print that was quarantined settled fine but must not trigger a chart/index
+      // rebuild or a "price moved" broadcast — nothing about the mark changed.
+      priceMoved: !verdict.excluded,
+      printExcluded: verdict.excluded,
+      printExclusionReason: verdict.reason,
       ownerId: trade.ownerId,
       claimerId: trade.claimerId,
       commodityId: trade.commodityId,

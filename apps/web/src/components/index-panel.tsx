@@ -387,7 +387,7 @@ function PortfolioTab({
     }
     // End the line at "now" using live prices.
     const liveValue = portfolio.holdings.reduce((sum, h) => {
-      const price = byId.get(h.commodityId)?.effectiveSell;
+      const price = byId.get(h.commodityId)?.price;
       return sum + (price != null ? h.scu * price : 0);
     }, 0);
     const nowT = Math.floor(Date.now() / 1000);
@@ -399,10 +399,10 @@ function PortfolioTab({
 
   const rows = portfolio.holdings.map((h) => {
     const e = byId.get(h.commodityId);
-    // Value holdings at what they'd actually fetch — player market if it beats the terminals.
-    const price = e?.effectiveSell ?? null;
+    // Value holdings at the mark — the player price where one exists, the NPC seed otherwise.
+    const price = e?.price ?? null;
     const value = price != null ? h.scu * price : null;
-    const prev = price != null && e?.change24hPct != null ? price / (1 + e.change24hPct / 100) : null;
+    const prev = price != null && e?.changePct != null ? price / (1 + e.changePct / 100) : null;
     const delta = value != null && prev != null ? value - h.scu * prev : null;
     const cost = h.avgCost != null ? h.scu * h.avgCost : null;
     const pnl = value != null && cost != null ? value - cost : null;

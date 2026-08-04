@@ -272,11 +272,20 @@ export const tradeEvents = pgTable(
 );
 
 /**
+ * Reasons a print is kept for audit but withheld from the mark. Never delete a print —
+ * a market that silently loses inconvenient trades cannot be checked by anyone.
+ */
+export const PRINT_EXCLUSIONS = ["outlier", "pair_rate_limit", "share_cap", "unverified", "mod"] as const;
+export type PrintExclusion = (typeof PRINT_EXCLUSIONS)[number];
+
+/**
  * The tape: one row per filled order. Prints — and only prints — pull the market price
  * away from the NPC baseline. Orders that expire unfilled never reach this table.
  *
- * `excluded` quarantines implausible prints from charts (kept for audit, never silently
- * dropped). M7 replaces owner-reported fills with dual counterparty confirmation.
+ * Both party ids are denormalised onto the row on purpose. The integrity checks all ask
+ * questions about WHO traded ("has this pair printed four times this week?", "is one account
+ * 80% of the window?"), and joining back through orders and trades to answer them inside the
+ * settlement transaction was both slow and easy to get subtly wrong.
  */
 export const tradePrints = pgTable(
   "trade_prints",
@@ -285,6 +294,8 @@ export const tradePrints = pgTable(
     orderId: uuid("order_id")
       .notNull()
       .references(() => orders.id),
+    /** The escrow this print came out of; null only for rows predating dual confirmation. */
+    tradeId: uuid("trade_id").references(() => trades.id),
     commodityId: integer("commodity_id")
       .notNull()
       .references(() => commodities.id),
@@ -292,13 +303,22 @@ export const tradePrints = pgTable(
       .notNull()
       .references(() => gameVersions.id),
     side: text("side", { enum: ORDER_SIDES }).notNull(),
+    /** Who received the cargo / who shipped it — independent of which side posted the order. */
+    buyerId: uuid("buyer_id").references(() => users.id),
+    sellerId: uuid("seller_id").references(() => users.id),
     pricePerScu: bigint("price_per_scu", { mode: "number" }).notNull(),
     quantityScu: integer("quantity_scu").notNull(),
     excluded: boolean("excluded").notNull().default(false),
-    exclusionReason: text("exclusion_reason"),
+    exclusionReason: text("exclusion_reason", { enum: PRINT_EXCLUSIONS }),
     executedAt: timestamp("executed_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("prints_commodity_time").on(t.commodityId, t.executedAt).where(sql`NOT ${t.excluded}`)],
+  (t) => [
+    index("prints_commodity_time").on(t.commodityId, t.executedAt).where(sql`NOT ${t.excluded}`),
+    // Pair-rate-limit lookups: "prints between these two accounts for this commodity, lately".
+    index("prints_pair").on(t.commodityId, t.buyerId, t.sellerId, t.executedAt),
+    // The tape view reads every print for a commodity, excluded ones included.
+    index("prints_commodity_all").on(t.commodityId, t.executedAt),
+  ],
 );
 
 /**

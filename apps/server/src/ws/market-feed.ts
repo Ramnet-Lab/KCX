@@ -13,7 +13,7 @@ import type { Ws } from "./server";
 export async function startMarketFeed(
   connectionString: string,
   ws: Ws,
-  onPriceMoved: () => Promise<void>,
+  onPriceMoved: (commodityId: number | null) => void,
 ): Promise<() => Promise<void>> {
   let client: pg.Client | null = null;
   let closed = false;
@@ -48,10 +48,10 @@ export async function startMarketFeed(
       for (const userId of change.participants ?? []) {
         ws.io.to(WS_ROOMS.user(userId)).emit("market:update", payload);
       }
-      // A settlement changes the printed mark — refresh the price ticker too.
-      if (change.priceMoved) {
-        void onPriceMoved().catch((err) => console.error("[market-feed] ticker refresh failed:", err));
-      }
+      // A settlement changed the mark. The web process has already written the reference
+      // point and the marks row; the derived series (candles, indices) are rebuilt here
+      // because that code lives in this process. Fire-and-forget — the handler coalesces.
+      if (change.priceMoved) onPriceMoved(change.commodityId ?? null);
     });
 
     try {
