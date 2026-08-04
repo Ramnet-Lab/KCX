@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  CandlestickSeries,
   ColorType,
   LineSeries,
   createChart,
@@ -19,10 +18,16 @@ import {
 } from "@/lib/chart-time";
 import { useMarketFeed } from "@/lib/use-market-feed";
 
+/**
+ * One bucket of the series. The OHLC fields are still carried because the underlying
+ * `reference_candles` rows have them and the API returns them, but the chart draws the
+ * close: with a half-hourly poll most buckets have a flat open/high/low/close, so candle
+ * bodies were mostly ticks on a line pretending to be a candlestick chart.
+ */
 export type CandlePoint = {
   /** epoch seconds */
   time: number;
-  /** KCX mark OHLC — the NPC seed until this commodity's first fill, player-driven after. */
+  /** KCX mark — the NPC seed until this commodity's first fill, player-driven after. */
   mktOpen: number | null;
   mktHigh: number | null;
   mktLow: number | null;
@@ -65,7 +70,7 @@ export function ReferenceChart({ commodityId, candles1h, candles1d, wsUrl }: Pro
 
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const markRef = useRef<ISeriesApi<"Line"> | null>(null);
   const baselineRef = useRef<ISeriesApi<"Line"> | null>(null);
   const buyRef = useRef<ISeriesApi<"Line"> | null>(null);
   const fittedRef = useRef(false);
@@ -130,18 +135,22 @@ export function ReferenceChart({ commodityId, candles1h, candles1d, wsUrl }: Pro
       localization: { timeFormatter: period === "1h" ? localTimeFormatter : utcDateFormatter },
       // Let a vertical drag scroll the PAGE, not the chart — otherwise the chart traps the finger.
       handleScroll: { vertTouchDrag: false },
-      crosshair: { mode: 0 },
+      // Magnet: with lines rather than candle bodies there is no bar to aim at, so snapping
+      // the crosshair to the series is the difference between reading a value and guessing.
+      crosshair: { mode: 1 },
     });
     chartRef.current = chart;
     fittedRef.current = false;
 
-    candleRef.current = chart.addSeries(CandlestickSeries, {
-      upColor: "#4ade80",
-      downColor: "#f87171",
-      borderUpColor: "#4ade80",
-      borderDownColor: "#f87171",
-      wickUpColor: "#4ade80",
-      wickDownColor: "#f87171",
+    // The mark is the headline number, so it's the heaviest line and the only one carrying
+    // a price line across to the axis.
+    markRef.current = chart.addSeries(LineSeries, {
+      color: "#4ade80",
+      lineWidth: 2,
+      priceLineVisible: true,
+      priceLineColor: "#4ade80",
+      priceLineStyle: 3,
+      lastValueVisible: true,
     });
     // NPC reference: where the market sits when no player has traded.
     baselineRef.current = chart.addSeries(LineSeries, {
@@ -167,7 +176,7 @@ export function ReferenceChart({ commodityId, candles1h, candles1d, wsUrl }: Pro
       observer.disconnect();
       chart.remove();
       chartRef.current = null;
-      candleRef.current = null;
+      markRef.current = null;
       baselineRef.current = null;
       buyRef.current = null;
     };
@@ -178,19 +187,11 @@ export function ReferenceChart({ commodityId, candles1h, candles1d, wsUrl }: Pro
 
   // Data — setData rather than a remount, so the visible range survives an update.
   useEffect(() => {
-    const candles = candleRef.current;
-    if (!candles || !baselineRef.current || !buyRef.current) return;
+    const mark = markRef.current;
+    if (!mark || !baselineRef.current || !buyRef.current) return;
 
-    candles.setData(
-      data
-        .filter((c) => c.mktOpen != null && c.mktHigh != null && c.mktLow != null && c.mktClose != null)
-        .map((c) => ({
-          time: c.time as UTCTimestamp,
-          open: c.mktOpen!,
-          high: c.mktHigh!,
-          low: c.mktLow!,
-          close: c.mktClose!,
-        })),
+    mark.setData(
+      data.filter((c) => c.mktClose != null).map((c) => ({ time: c.time as UTCTimestamp, value: c.mktClose! })),
     );
     baselineRef.current.setData(
       data.filter((c) => c.sellClose != null).map((c) => ({ time: c.time as UTCTimestamp, value: c.sellClose! })),
