@@ -130,14 +130,39 @@ prepare_env() {
 # ---------------------------------------------------------------- build and run
 compose() { if [ "$MODE" = "prod" ]; then "${PROD_COMPOSE[@]}" "$@"; else "${DEV_COMPOSE[@]}" "$@"; fi; }
 
+# The dev and prod stacks are separate Compose projects (kcx-dev / kcx) that publish the
+# same ports. Starting one while the other runs fails with an opaque port-bind error, so
+# check first — and refuse rather than stopping it, since that could take a live site down.
+check_conflicting_stack() {
+  local other other_name
+  if [ "$MODE" = "prod" ]; then other="kcx-dev"; other_name="dev"; else other="kcx"; other_name="prod"; fi
+
+  if [ -n "$(docker ps -q --filter "label=com.docker.compose.project=${other}" 2>/dev/null)" ]; then
+    die \
+"the ${other_name} stack is already running and uses the same ports.
+    Stop it first:  ./docker-setup.sh down
+    Then re-run:    ./docker-setup.sh ${MODE}"
+  fi
+}
+
 build_and_start() {
   say "Building images (first run pulls the Node base image — a few minutes)"
   compose build
   ok "images built"
 
   say "Starting the stack"
-  compose up -d
-  ok "containers started"
+  # --remove-orphans clears containers from services that no longer exist; without it a
+  # renamed service leaves a stray container running forever.
+  # `up -d` recreates only what changed: new images replace web/server, while the database
+  # container (and its volume) is left untouched, so rebuilding never costs data.
+  compose up -d --remove-orphans
+  ok "containers started (database preserved)"
+
+  local dangling
+  dangling="$(docker images -f dangling=true -q 2>/dev/null | wc -l | tr -d ' ')"
+  if [ "${dangling:-0}" -gt 0 ]; then
+    warn "${dangling} superseded image layer(s) left behind — reclaim with: docker image prune -f"
+  fi
 }
 
 wait_healthy() {
@@ -218,6 +243,7 @@ case "$MODE" in
   dev|prod)
     printf '%sKCX Docker setup%s (%s)\n================\n' "$BOLD" "$RESET" "$MODE"
     check_prereqs
+    check_conflicting_stack
     prepare_env
     build_and_start
     wait_healthy
