@@ -40,9 +40,15 @@ export async function checkGameVersion(): Promise<void> {
   }
 
   // First sighting: record it and wait for the next poll to agree.
-  if (pendingVersion !== live) {
+  //
+  // Except on a database with no season at all, where the two-poll rule protects nothing and
+  // costs a lot. There is nothing to roll over, and season_id is NOT NULL on orders, prints
+  // and contracts — so a fresh install with no active season cannot accept a trade at all
+  // until the next hourly poll. The delay exists to make a destructive action deliberate;
+  // creating the first season destroys nothing.
+  if (active && pendingVersion !== live) {
     pendingVersion = live;
-    console.log(`[game-version] saw ${live} (active: ${active?.version ?? "none"}) — awaiting a second poll before rolling over`);
+    console.log(`[game-version] saw ${live} (active: ${active.version}) — awaiting a second poll before rolling over`);
     return;
   }
   pendingVersion = null;
