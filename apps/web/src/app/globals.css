@@ -1,14 +1,16 @@
 @import "tailwindcss";
 
 /*
- * asset-revision: 2
+ * Bump this when a client cache needs breaking.
  *
- * The compiled stylesheet is content-hashed and served immutable for a year, so its filename
- * only changes when this file's content does. That means a browser which once cached a bad
- * response for that URL keeps it for a year, and no amount of purging the CDN reaches it.
- * Bumping this comment mints a new filename, which is the only way to route around a client
- * cache we cannot invalidate.
+ * The compiled stylesheet is content-hashed and served immutable for a year, so its URL
+ * changes only when the COMPILED bytes change. It has to live in a plain rule: comments are
+ * stripped by the minifier, and an unused token inside @theme is pruned by Tailwind — both
+ * leave the output byte-identical and the URL unchanged.
  */
+:root {
+  --kcx-asset-revision: 2;
+}
 
 @theme {
   /* KCX terminal palette — dark only */
