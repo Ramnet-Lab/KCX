@@ -1,0 +1,109 @@
+import { bazaarEvents, bazaarListings, gameVersions, getDb, listBazaarListings } from "@kcx/db";
+import { BAZAAR_CATEGORIES, BAZAAR_LISTING_TYPES, bazaarCreateInput } from "@kcx/shared";
+import { eq } from "drizzle-orm";
+import { NextResponse } from "next/server";
+import { currentUser } from "@/lib/session";
+
+export const dynamic = "force-dynamic";
+
+const SORTS = ["newest", "ending", "price_asc", "price_desc"] as const;
+
+/** GET — the public board. */
+export async function GET(request: Request) {
+  const user = await currentUser();
+  const url = new URL(request.url);
+  const q = url.searchParams;
+
+  // Anything unrecognised falls back to the default rather than reaching a query: these all
+  // reach SQL, and an unvalidated sort key is the one that would reach it as an identifier.
+  const category = BAZAAR_CATEGORIES.find((c) => c === q.get("category")) ?? null;
+  const listingType = BAZAAR_LISTING_TYPES.find((t) => t === q.get("type")) ?? null;
+  const sort = SORTS.find((s) => s === q.get("sort")) ?? "newest";
+
+  try {
+    const listings = await listBazaarListings(getDb(), {
+      viewerId: user?.id ?? null,
+      category,
+      listingType,
+      sort,
+      search: q.get("q"),
+      mineOnly: q.get("mine") === "1",
+      // "Everything" includes what has already gone, so a buyer can see what things
+      // actually sold for rather than only what is still unsold.
+      statuses: q.get("all") === "1" ? ["active", "sold_out", "expired"] : ["active"],
+    });
+    return NextResponse.json({ listings });
+  } catch (err) {
+    console.error("[bazaar:list]", err instanceof Error ? err.message : err);
+    return NextResponse.json({ listings: [], error: "Unavailable" }, { status: 503 });
+  }
+}
+
+/**
+ * POST — put something up for sale.
+ *
+ * No collateral is taken from the seller: a ship or a crate of crafted goods isn't a
+ * declared holding the exchange can check, unlike commodity cargo. What backs the listing
+ * is the seller's standing, which is why it travels with every card on the board.
+ */
+export async function POST(request: Request) {
+  const user = await currentUser();
+  if (!user) return NextResponse.json({ error: "Sign in to sell" }, { status: 401 });
+  if (!user.isVerified) {
+    return NextResponse.json({ error: "Verify your RSI handle to sell on the bazaar" }, { status: 403 });
+  }
+
+  const parsed = bazaarCreateInput.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid listing" }, { status: 400 });
+  }
+  const input = parsed.data;
+
+  const db = getDb();
+  const [season] = await db.select().from(gameVersions).where(eq(gameVersions.status, "active"));
+  if (!season) return NextResponse.json({ error: "No active season" }, { status: 503 });
+
+  const isAuction = input.listingType !== "buy_now";
+  const runsUntil = new Date(Date.now() + input.runForHours * 3_600_000);
+
+  try {
+    const listing = await db.transaction(async (tx) => {
+      const [created] = await tx
+        .insert(bazaarListings)
+        .values({
+          sellerId: user.id,
+          seasonId: season.id,
+          title: input.title,
+          description: input.description?.trim() || null,
+          category: input.category,
+          listingType: input.listingType,
+          buyNowPrice: input.listingType === "auction" ? null : (input.buyNowPrice ?? null),
+          startPrice: isAuction ? (input.startPrice ?? null) : null,
+          // The auction and the listing share a deadline at creation. A late bid can push
+          // the auction out (soft close), and that pushes the listing with it.
+          auctionEndsAt: isAuction ? runsUntil : null,
+          quantity: input.quantity,
+          remainingQuantity: input.quantity,
+          locationId: input.locationId ?? null,
+          expiresAt: runsUntil,
+        })
+        .returning();
+      await tx.insert(bazaarEvents).values({
+        listingId: created!.id,
+        actorId: user.id,
+        type: "listed",
+        data: {
+          listingType: input.listingType,
+          buyNowPrice: input.buyNowPrice ?? null,
+          startPrice: input.startPrice ?? null,
+          quantity: input.quantity,
+        },
+      });
+      return created!;
+    });
+    return NextResponse.json({ id: listing.id }, { status: 201 });
+  } catch (err) {
+    console.error("[bazaar:create]", err instanceof Error ? err.message : err);
+    return NextResponse.json({ error: "Could not post the listing" }, { status: 500 });
+  }
+}

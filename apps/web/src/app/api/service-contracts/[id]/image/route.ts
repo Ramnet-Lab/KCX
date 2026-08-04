@@ -1,18 +1,12 @@
 import { contractEvents, getDb, serviceContracts } from "@kcx/db";
 import { eq } from "drizzle-orm";
-import { unlink } from "node:fs/promises";
-import { join } from "node:path";
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/session";
-import { MAX_UPLOAD_BYTES, SAFE_FILENAME, storeContractImage, uploadRoot } from "@/lib/uploads";
+import { MAX_UPLOAD_BYTES, removeUploadedImage, storeUploadedImage } from "@/lib/uploads";
 
 export const dynamic = "force-dynamic";
 
-/** Remove a stored file, ignoring the case where it is already gone. */
-async function removeFile(filename: string | null) {
-  if (!filename || !SAFE_FILENAME.test(filename)) return;
-  await unlink(join(uploadRoot(), "contracts", filename)).catch(() => {});
-}
+const removeFile = (filename: string | null) => removeUploadedImage("contracts", filename);
 
 /**
  * POST /api/service-contracts/:id/image — attach a screenshot.
@@ -50,7 +44,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: "Could not read the upload" }, { status: 400 });
   }
 
-  const stored = await storeContractImage(buf);
+  const stored = await storeUploadedImage(buf, "contracts");
   if (!stored.ok) return NextResponse.json({ error: stored.error }, { status: 415 });
 
   try {

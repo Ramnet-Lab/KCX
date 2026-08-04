@@ -43,7 +43,11 @@ services:
       UEX_API_TOKEN: ${UEX_API_TOKEN:-}
       WS_PORT: "4000"
       BOOTSTRAP_ADMIN_HANDLE: ${BOOTSTRAP_ADMIN_HANDLE:-ramnet}
-      WEB_ORIGINS: http://localhost:3000
+      # socket.io's CORS allowlist. Hardcoded to localhost, this silently withheld
+      # Access-Control-Allow-Origin from the real domain: the live feed survived only because
+      # browsers don't apply CORS to a WebSocket upgrade, so the polling fallback was dead for
+      # anyone whose network blocks WS.
+      WEB_ORIGINS: ${WEB_ORIGINS:-http://localhost:3000}
     ports:
       - "4000:4000"
 
@@ -58,10 +62,20 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://kcx:kcx@db:5432/kcx
-      NEXT_PUBLIC_WS_URL: http://localhost:4000
-      IP_HASH_SALT: dev-salt
+      # NEXT_PUBLIC_WS_URL deliberately absent: Next inlines NEXT_PUBLIC_* at BUILD time, so a
+      # value set here never reaches the browser bundle. The client derives the socket endpoint
+      # from window.location instead — see apps/web/src/lib/ws-url.ts.
+      #
+      # Pinning the WebAuthn relying-party ID rather than letting it fall back to the request
+      # Host header, which is attacker-supplied. Unset, the fallback still resolves correctly
+      # behind the tunnel; set, it cannot be talked out of.
+      WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-}
+      IP_HASH_SALT: ${IP_HASH_SALT:-dev-salt}
       UPLOAD_DIR: /app/uploads
-      ALLOW_DEV_LOGIN: "true"
+      # Opt-in, never on by default. /api/dev-session mints a session for ANY handle, creating
+      # the account if absent. Today only NODE_ENV=production stops it — one variable between a
+      # public deployment and an unauthenticated become-any-user endpoint, including admins.
+      ALLOW_DEV_LOGIN: ${ALLOW_DEV_LOGIN:-}
     ports:
       - "3000:3000"
     volumes:

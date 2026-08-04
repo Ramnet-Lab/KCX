@@ -4,16 +4,9 @@ import { canSeeContractDetails, getDb, serviceContracts } from "@kcx/db";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/session";
-import { SAFE_FILENAME, uploadRoot } from "@/lib/uploads";
+import { SAFE_FILENAME, UPLOAD_MIME, uploadRoot } from "@/lib/uploads";
 
 export const dynamic = "force-dynamic";
-
-const MIME: Record<string, string> = {
-  jpg: "image/jpeg",
-  png: "image/png",
-  webp: "image/webp",
-  gif: "image/gif",
-};
 
 /**
  * Serve an uploaded contract image.
@@ -38,7 +31,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ fil
   }
 
   const ext = file.split(".").pop()!.toLowerCase();
-  const mime = MIME[ext];
+  const mime = UPLOAD_MIME[ext];
   if (!mime) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   let classified = false;

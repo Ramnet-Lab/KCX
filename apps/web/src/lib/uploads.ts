@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 /**
- * Contract image handling.
+ * Uploaded image handling, shared by contract screenshots and bazaar listing photos.
  *
- * Users upload screenshots — an assassination target, a wreck to salvage, cargo waiting on
- * a pad. That makes this an untrusted-content surface, so the rules here are deliberate:
+ * Users upload pictures — an assassination target, a wreck to salvage, the ship they're
+ * selling. That makes this an untrusted-content surface, so the rules here are deliberate:
  *
  *  • Format is decided by MAGIC BYTES, never the filename or the browser's Content-Type,
  *    both of which the client controls.
@@ -106,7 +106,17 @@ export function uploadRoot(): string {
 
 export type StoredImage = { filename: string; mime: string; bytes: number };
 
-export async function storeContractImage(buf: Buffer): Promise<{ ok: true; image: StoredImage } | { ok: false; error: string }> {
+/**
+ * Subdirectories under the upload root. A closed union rather than a string: this value
+ * becomes a path segment, so it must never be something a request can choose.
+ */
+export const UPLOAD_BUCKETS = ["contracts", "bazaar"] as const;
+export type UploadBucket = (typeof UPLOAD_BUCKETS)[number];
+
+export async function storeUploadedImage(
+  buf: Buffer,
+  bucket: UploadBucket,
+): Promise<{ ok: true; image: StoredImage } | { ok: false; error: string }> {
   if (buf.length > MAX_UPLOAD_BYTES) {
     return { ok: false, error: `Image is ${(buf.length / 1048576).toFixed(1)} MB; the limit is 5 MB.` };
   }
@@ -124,12 +134,26 @@ export async function storeContractImage(buf: Buffer): Promise<{ ok: true; image
   }
 
   const filename = `${randomUUID()}.${sniffed.ext}`;
-  const dir = join(uploadRoot(), "contracts");
+  const dir = join(uploadRoot(), bucket);
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, filename), cleaned);
 
   return { ok: true, image: { filename, mime: sniffed.mime, bytes: cleaned.length } };
 }
+
+/** Remove a stored file, ignoring the case where it is already gone. */
+export async function removeUploadedImage(bucket: UploadBucket, filename: string | null): Promise<void> {
+  if (!filename || !SAFE_FILENAME.test(filename)) return;
+  await unlink(join(uploadRoot(), bucket, filename)).catch(() => {});
+}
+
+/** Content types are decided from our own map, never from the request. */
+export const UPLOAD_MIME: Record<string, string> = {
+  jpg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+  gif: "image/gif",
+};
 
 /** Guard against traversal: only ever a bare generated filename. */
 export const SAFE_FILENAME = /^[0-9a-f-]{36}\.(jpg|png|webp|gif)$/i;

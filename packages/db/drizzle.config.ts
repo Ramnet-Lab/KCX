@@ -30,6 +30,7 @@ export default defineConfig({
     "./src/schema/orders.ts",
     "./src/schema/auth.ts",
     "./src/schema/contracts.ts",
+    "./src/schema/bazaar.ts",
     "./src/schema/moderation.ts",
   ],
   out: "./migrations",

@@ -5,17 +5,20 @@ import { orders, userHoldings, users } from "../schema/orders";
 /**
  * Collateral accounting — KCX lists only what traders actually have.
  *
- * There is no margin, no shorting, and no options. A trader's obligations come from THREE
+ * There is no margin, no shorting, and no options. A trader's obligations come from FIVE
  * places and all must be counted together, or the same cargo/aUEC can back two promises:
  *
  *   1. Resting orders they posted     → the UNRESERVED remainder (remaining − reserved)
  *   2. Open escrow contracts          → whichever side of the trade they owe
  *   3. Service contracts they issued  → the payout they owe on completion (aUEC only),
  *                                       or the ceiling while a reverse auction is running
+ *   4. Standing high bids at auction  → the bid, for as long as it is the leading one
+ *   5. Agreed bazaar purchases        → the sale total, until it settles or falls through
  *
  * (3) lives here rather than at the call site on purpose: when it was summed by one caller,
  * every other consumer — the portfolio panel, order placement, balance edits — silently
- * undercounted, and the same aUEC could back both a contract payout and a buy order.
+ * undercounted, and the same aUEC could back both a contract payout and a buy order. (4)
+ * and (5) join it for the same reason: a bid the bidder cannot cover is not a bid.
  *
  * The reserved slice of an order is deliberately excluded from (1) because it is already
  * counted as an escrow in (2) — otherwise claiming your own order's quantity double-counts.
@@ -57,6 +60,23 @@ const COMMITTED_AUEC = (userId: string) => sql`(
       FROM service_contracts sc
       WHERE sc.issuer_id = ${userId}
         AND sc.status IN ('open','bidding','awarded','in_progress')
+    ), 0)
+    +
+    coalesce((
+      -- Only the STANDING high bid is committed. The moment someone is outbid their row
+      -- becomes 'outbid' and their aUEC is free again, which is what makes it possible to
+      -- chase several auctions at once without pretending to have the money twice.
+      SELECT sum(bb.amount)
+      FROM bazaar_bids bb
+      WHERE bb.bidder_id = ${userId} AND bb.status = 'active'
+    ), 0)
+    +
+    coalesce((
+      -- Agreed but not yet settled: the buyer owes this until they meet up, or until the
+      -- sale falls through and the units go back on the board.
+      SELECT sum(bs.total_price)
+      FROM bazaar_sales bs
+      WHERE bs.buyer_id = ${userId} AND bs.status = 'pending'
     ), 0)
 )`;
 
@@ -130,7 +150,7 @@ export async function savePortfolio(
     if (input.auec < committedAuec) {
       return {
         ok: false as const,
-        error: `${committedAuec.toLocaleString()} aUEC is committed to open orders and contracts — cancel some before lowering your balance below that.`,
+        error: `${committedAuec.toLocaleString()} aUEC is committed to open orders, contracts and bazaar bids — clear some before lowering your balance below that.`,
       };
     }
 
