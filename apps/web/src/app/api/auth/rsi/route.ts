@@ -1,4 +1,4 @@
-import { getDb, users } from "@kcx/db";
+import { getDb, syncMembershipFromProfile, users } from "@kcx/db";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -66,6 +66,20 @@ export async function POST(request: Request) {
     userId = created!.id;
     await logAuthEvent("account_created", { userId, handle });
   }
+
+  /*
+   * Org membership is DERIVED, and this is the only place it changes.
+   *
+   * Nobody joins or leaves an org on KCX — they do it on RSI, and we read it here. That
+   * also refreshes their rank (which is what makes the star ranking a credential rather
+   * than a claim) and their authority freshness, so a treasurer who is still in the org
+   * keeps spending and one who left quietly stops.
+   *
+   * Best-effort: a roster that failed to update must never cost someone their sign-in.
+   */
+  await syncMembershipFromProfile(db, { userId, profile: outcome.profile }).catch((err) =>
+    console.error("[rsi:org-sync]", err instanceof Error ? err.message : err),
+  );
 
   // Verification alone signs you in; enrolling a passkey is the next step, not a gate.
   if (!signedIn) {

@@ -2,10 +2,12 @@ import {
   bazaarEvents,
   bazaarListings,
   buyCapacity,
-  canSpendOrgFunds,
+  canActForOrg,
+  createOrgProposal,
   gameVersions,
   getBazaarItem,
   getDb,
+  getOrgProposal,
   listBazaarListings,
   resolveOrCreateItem,
 } from "@kcx/db";
@@ -78,35 +80,88 @@ export async function POST(request: Request) {
   const isAuction = input.listingType !== "buy_now";
   const runsUntil = new Date(Date.now() + input.runForHours * 3_600_000);
 
-  // A wanted ad is an offer, not a wish: the money behind it is committed for as long as it
-  // stands, so it has to be there when it goes up. Sell listings post no collateral — an
-  // arbitrary item isn't a declared holding the exchange can check.
-  if (input.intent === "buy") {
-    const cost = (input.buyNowPrice ?? 0) * input.quantity;
-    if (input.orgId) {
-      // Two ceilings: the org's uncommitted treasury, and this member's delegated slice.
-      const check = await canSpendOrgFunds(db, { orgId: input.orgId, userId: user.id, amount: cost });
-      if (!check.allowed) {
-        return NextResponse.json({ error: check.reason ?? "The org can't cover that", check }, { status: 409 });
-      }
-    } else {
-      const capacity = await buyCapacity(db, user.id);
-      if (cost > capacity.available) {
-        return NextResponse.json(
-          {
-            error: `That wanted ad commits ${cost.toLocaleString()} aUEC but you have ${Math.max(0, capacity.available).toLocaleString()} free — your orders, contracts, bids and other wanted ads are already committed against your declared balance.`,
-            capacity,
-          },
-          { status: 409 },
-        );
-      }
+  /*
+   * A board-approved replay. The id is trusted only after the proposal is re-read here and
+   * found approved, of the right kind, and for this org — so nobody can hand-craft one.
+   *
+   * Honouring it does two things: the listing belongs to whoever PROPOSED it rather than to
+   * whoever cast the deciding vote, and the board gate below is skipped, without which the
+   * replay would open a fresh proposal and every approval would spawn another.
+   */
+  let actingUserId = user.id;
+  if (input.approvedProposalId) {
+    const proposal = await getOrgProposal(db, input.approvedProposalId);
+    const valid =
+      proposal &&
+      proposal.status === "approved" &&
+      proposal.kind === "bazaar_listing" &&
+      proposal.orgId === input.orgId;
+    if (!valid) {
+      return NextResponse.json({ error: "That proposal isn't approved for this action" }, { status: 409 });
     }
-  } else if (input.orgId) {
-    // Selling for an org moves no money up front, but it does route the proceeds to the
-    // treasury — so membership still has to be real.
-    const check = await canSpendOrgFunds(db, { orgId: input.orgId, userId: user.id, amount: 0 });
+    actingUserId = proposal.proposedById;
+  }
+
+  if (input.orgId && !input.approvedProposalId) {
+    /*
+     * Acting for an org runs the org gate, not the personal one: verified-and-unsuspended,
+     * a role that touches money, a membership reading that isn't stale, the treasury, and
+     * the member's delegated slice.
+     *
+     * A wanted ad is valued at what it commits; a sell listing commits nothing up front but
+     * still routes proceeds to the treasury, so membership must be real either way.
+     */
+    const cost = input.intent === "buy" ? (input.buyNowPrice ?? 0) * input.quantity : 0;
+    const check = await canActForOrg(db, { orgId: input.orgId, userId: user.id, amount: cost });
     if (!check.allowed) {
-      return NextResponse.json({ error: check.reason ?? "You can't act for that org" }, { status: 403 });
+      return NextResponse.json({ error: check.reason ?? "You can't act for that org", check }, { status: 409 });
+    }
+
+    // Above the org's threshold this doesn't happen now — it goes to the board, and the
+    // same payload is replayed against this endpoint once the vote carries.
+    if (check.needsBoard) {
+      const proposal = await createOrgProposal(db, {
+        orgId: input.orgId,
+        proposedById: user.id,
+        kind: "bazaar_listing",
+        value: cost,
+        summary:
+          input.intent === "buy"
+            ? `Wanted ad: ${input.title} — up to ${cost.toLocaleString()} aUEC`
+            : `List for sale: ${input.title}`,
+        payload: input,
+        requiredApprovals: check.requiredApprovals,
+      });
+      if (!proposal.ok) return NextResponse.json({ error: proposal.error }, { status: 500 });
+      return NextResponse.json(
+        {
+          pendingBoardApproval: true,
+          proposalId: proposal.proposalId,
+          requiredApprovals: check.requiredApprovals,
+        },
+        { status: 202 },
+      );
+    }
+  }
+
+  /*
+   * A wanted ad is an offer, not a wish: the money behind it is committed for as long as it
+   * stands, so it has to be there when it goes up. Sell listings post no collateral — an
+   * arbitrary item isn't a declared holding the exchange can check.
+   *
+   * Org ads were gated above against the treasury, so they never reach here.
+   */
+  if (input.intent === "buy" && !input.orgId) {
+    const cost = (input.buyNowPrice ?? 0) * input.quantity;
+    const capacity = await buyCapacity(db, user.id);
+    if (cost > capacity.available) {
+      return NextResponse.json(
+        {
+          error: `That wanted ad commits ${cost.toLocaleString()} aUEC but you have ${Math.max(0, capacity.available).toLocaleString()} free — your orders, contracts, bids and other wanted ads are already committed against your declared balance.`,
+          capacity,
+        },
+        { status: 409 },
+      );
     }
   }
 
@@ -120,7 +175,7 @@ export async function POST(request: Request) {
     if (!item) return NextResponse.json({ error: "That item isn't in the catalogue" }, { status: 400 });
     itemId = item.id;
   } else if (input.itemName) {
-    const resolved = await resolveOrCreateItem(db, { name: input.itemName, userId: user.id });
+    const resolved = await resolveOrCreateItem(db, { name: input.itemName, userId: actingUserId });
     if (!resolved.ok) return NextResponse.json({ error: resolved.error }, { status: 400 });
     itemId = resolved.item.id;
   }
@@ -131,7 +186,7 @@ export async function POST(request: Request) {
         .insert(bazaarListings)
         .values({
           // `sellerId` is the POSTER — the buyer on a wanted ad. See schema/bazaar.ts.
-          sellerId: user.id,
+          sellerId: actingUserId,
           intent: input.intent,
           orgId: input.orgId ?? null,
           seasonId: season.id,
@@ -153,7 +208,7 @@ export async function POST(request: Request) {
         .returning();
       await tx.insert(bazaarEvents).values({
         listingId: created!.id,
-        actorId: user.id,
+        actorId: actingUserId,
         type: "listed",
         data: {
           intent: input.intent,

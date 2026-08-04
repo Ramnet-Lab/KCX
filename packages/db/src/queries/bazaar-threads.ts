@@ -4,7 +4,7 @@ import { bazaarListings, bazaarMessages, bazaarSales, bazaarThreads } from "../s
 import { users } from "../schema/orders";
 import { BAZAAR_SETTLE_HOURS } from "./bazaar";
 import { committedAuecSql } from "./collateral";
-import { canSpendOrgFunds } from "./orgs";
+import { canActForOrg } from "./orgs";
 
 /**
  * Negotiation on the bazaar: talking, offering, and turning an accepted offer into a sale.
@@ -368,7 +368,7 @@ export async function acceptBazaarOffer(
     // A purchase for an org is checked against the org's treasury and the acting member's
     // delegated slice of it, not against the member's own balance.
     if (buyerOrgId) {
-      const check = await canSpendOrgFunds(tx as unknown as Db, { orgId: buyerOrgId, userId: buyerId, amount: total });
+      const check = await canActForOrg(tx as unknown as Db, { orgId: buyerOrgId, userId: buyerId, amount: total });
       if (!check.allowed) return { ok: false as const, error: check.reason ?? "The org can't cover that" };
     } else {
       const capacity = await tx.execute<{ available: string }>(sql`

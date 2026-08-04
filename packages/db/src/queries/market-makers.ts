@@ -2,7 +2,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "../client";
 import { marketMakerQuotes } from "../schema/market-makers";
 import { buyCapacity, sellCapacity } from "./collateral";
-import { canSpendOrgFunds } from "./orgs";
+import { canActForOrg } from "./orgs";
 
 /**
  * Market maker quotes: posting them, standing them down, and measuring who actually stayed.
@@ -152,7 +152,7 @@ export async function upsertMakerQuote(
 
   const bidCost = opts.bidPrice * opts.bidSizeScu;
   if (opts.orgId) {
-    const check = await canSpendOrgFunds(db, { orgId: opts.orgId, userId: opts.userId, amount: bidCost });
+    const check = await canActForOrg(db, { orgId: opts.orgId, userId: opts.userId, amount: bidCost });
     if (!check.allowed) return { ok: false, error: check.reason ?? "The org can't back that bid" };
   } else {
     const capacity = await buyCapacity(db, opts.userId);

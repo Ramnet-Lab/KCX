@@ -285,7 +285,17 @@ function ListingCard({ listing: l }: { listing: BazaarListingDto }) {
         </div>
 
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-ink-faint">
-          <span className="text-ink-dim">{l.sellerName}</span>
+          {l.orgSid ? (
+            <span className="flex items-center gap-1" title={`${l.orgName} — an org-controlled listing`}>
+              {l.orgLogoFilename && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={`/api/uploads/orgs/${l.orgLogoFilename}`} alt="" className="h-3.5 w-3.5 rounded-sm" />
+              )}
+              <span className="font-bold text-ink-dim">{l.orgSid}</span>
+            </span>
+          ) : (
+            <span className="text-ink-dim">{l.sellerName}</span>
+          )}
           <BazaarStandingBadge {...l.sellerStanding} compact />
           {!ended && (
             <span className={`ml-auto ${closing ? "font-bold text-accent" : ""}`} suppressHydrationWarning>

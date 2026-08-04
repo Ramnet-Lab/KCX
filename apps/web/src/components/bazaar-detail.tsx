@@ -149,8 +149,25 @@ export function BazaarDetail({
 
             <dl className="mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
               <div>
-                <dt className="text-ink-faint">Seller</dt>
-                <dd className="text-ink">{l.sellerName}</dd>
+                <dt className="text-ink-faint">{l.orgSid ? "Acting for" : "Seller"}</dt>
+                <dd className="text-ink">
+                  {l.orgSid ? (
+                    <span className="flex items-center gap-1.5">
+                      {l.orgLogoFilename && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={`/api/uploads/orgs/${l.orgLogoFilename}`}
+                          alt=""
+                          className="h-4 w-4 rounded-sm border border-line"
+                        />
+                      )}
+                      {l.orgName}
+                      <span className="text-[10px] text-ink-faint">via {l.sellerName}</span>
+                    </span>
+                  ) : (
+                    l.sellerName
+                  )}
+                </dd>
               </div>
               <div>
                 <dt className="text-ink-faint">Standing</dt>

@@ -1,4 +1,13 @@
-import { getDb, listMyOrgs, listOrgMembers, orgStanding, type OrgDto, type OrgMemberDto } from "@kcx/db";
+import {
+  getDb,
+  listMyOrgs,
+  listOrgMembers,
+  listOrgProposals,
+  orgStanding,
+  type OrgDto,
+  type OrgMemberDto,
+  type OrgProposalDto,
+} from "@kcx/db";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { OrgConsole } from "@/components/org-console";
@@ -22,6 +31,7 @@ export default async function OrgsPage({ searchParams }: { searchParams: Promise
 
   let orgs: OrgDto[] = [];
   let members: OrgMemberDto[] = [];
+  let proposals: OrgProposalDto[] = [];
   let standing: Awaited<ReturnType<typeof orgStanding>> | null = null;
 
   try {
@@ -29,7 +39,11 @@ export default async function OrgsPage({ searchParams }: { searchParams: Promise
     orgs = await listMyOrgs(db, user.id);
     const selected = orgs.find((o) => o.id === id) ?? orgs[0];
     if (selected) {
-      [members, standing] = await Promise.all([listOrgMembers(db, selected.id), orgStanding(db, selected.id)]);
+      [members, standing, proposals] = await Promise.all([
+        listOrgMembers(db, selected.id),
+        orgStanding(db, selected.id),
+        listOrgProposals(db, selected.id, user.id),
+      ]);
     }
   } catch (err) {
     console.error("[orgs page]", err instanceof Error ? err.message : err);
@@ -40,14 +54,20 @@ export default async function OrgsPage({ searchParams }: { searchParams: Promise
       <div className="mb-4">
         <h1 className="text-lg font-bold text-ink">Orgs</h1>
         <p className="text-xs text-ink-dim">
-          Trade as a group: a shared declared treasury, members who can commit it up to a limit
-          you set, and a settlement record that belongs to the org rather than to whoever
-          happened to click. An org here has to be one your verified RSI profile says you
-          actually belong to.
+          Orgs come from RSI, not from here: one appears when a verified trader's profile names
+          it, and the roster is whoever currently names it. Before it can trade, someone who can
+          edit the org's RSI charter has to prove they lead it — after that their word decides
+          who holds what, and the board decides what gets bought.
         </p>
       </div>
 
-      <OrgConsole orgs={orgs} selectedId={id ?? null} members={members} standing={standing} />
+      <OrgConsole
+        orgs={orgs}
+        selectedId={id ?? null}
+        members={members}
+        proposals={proposals}
+        standing={standing}
+      />
     </>
   );
 }

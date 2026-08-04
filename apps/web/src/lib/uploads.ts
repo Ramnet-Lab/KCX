@@ -110,7 +110,7 @@ export type StoredImage = { filename: string; mime: string; bytes: number };
  * Subdirectories under the upload root. A closed union rather than a string: this value
  * becomes a path segment, so it must never be something a request can choose.
  */
-export const UPLOAD_BUCKETS = ["contracts", "bazaar"] as const;
+export const UPLOAD_BUCKETS = ["contracts", "bazaar", "orgs"] as const;
 export type UploadBucket = (typeof UPLOAD_BUCKETS)[number];
 
 export async function storeUploadedImage(

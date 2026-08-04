@@ -78,6 +78,12 @@ const base = {
    * of a sale land — checked server-side against the poster's role and delegated limit.
    */
   orgId: z.uuid().optional(),
+  /**
+   * Set only by the board-approval replay. The server re-reads the proposal before trusting
+   * it, and honouring it means the listing is created under the ORIGINAL proposer with the
+   * board gate already satisfied — see /api/orgs/proposals/[id].
+   */
+  approvedProposalId: z.uuid().optional(),
 };
 
 /**

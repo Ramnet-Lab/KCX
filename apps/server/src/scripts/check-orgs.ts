@@ -1,12 +1,15 @@
 /**
- * End-to-end check of org treasuries and delegated spending.
+ * End-to-end check of the org model.
  *
- * The rule worth testing is the TWO ceilings: an org's uncommitted treasury and the acting
- * member's delegated slice of it. Enforcing only the first would make every spend limit
- * decorative, which is the failure that matters — an org that trusts someone with 10M of a
- * 200M treasury has said something specific.
+ * The rules worth proving, in the order they matter:
+ *   - membership is DERIVED from RSI; nobody joins or leaves on KCX
+ *   - an unverified org cannot trade at all
+ *   - only the presumed leader (highest rank stars) may open a leadership claim
+ *   - once verified, the president overrides the star ranking outright
+ *   - authority goes stale, so someone who quietly left stops being able to spend
+ *   - the board's threshold binds, and the proposer can never supply their own quorum
  *
- * WRITES TO THE DATABASE — creates a throwaway org and accounts, then removes them.
+ * WRITES TO THE DATABASE — creates throwaway accounts and an org, then removes them.
  */
 import { loadRootEnv } from "../env";
 loadRootEnv();
@@ -17,130 +20,190 @@ if (process.env.ALLOW_DESTRUCTIVE_CHECKS !== "true") {
 }
 
 import {
-  bazaarListings,
-  canSpendOrgFunds,
+  ORG_AUTHORITY_STALE_DAYS,
+  canActForOrg,
   closeDb,
-  createOrg,
-  gameVersions,
+  completeOrgVerification,
+  createOrgProposal,
   getDb,
-  orgStanding,
-  removeOrgMember,
-  setOrgMember,
+  getOrgBySid,
+  liveOrgVerification,
+  listOrgMembers,
+  modSetOrgSuspended,
+  presumedLeader,
+  setOrgBoardRules,
+  setOrgMemberRole,
   setOrgTreasury,
+  startOrgVerification,
+  syncMembershipFromProfile,
+  transferOrgLeadership,
   users,
+  voteOnOrgProposal,
 } from "@kcx/db";
-import { eq, sql } from "drizzle-orm";
+import type { RsiProfile } from "@kcx/shared";
+import { sql } from "drizzle-orm";
 
 const db = getDb();
 const ok = (label: string, cond: boolean) => console.log(`${cond ? "PASS" : "FAIL"}  ${label}`);
 
-const SID = "ZZTEST";
-await db.execute(sql`DELETE FROM bazaar_listings WHERE org_id IN (SELECT id FROM orgs WHERE sid = ${SID})`);
-await db.execute(sql`DELETE FROM org_events WHERE org_id IN (SELECT id FROM orgs WHERE sid = ${SID})`);
-await db.execute(sql`DELETE FROM org_members WHERE org_id IN (SELECT id FROM orgs WHERE sid = ${SID})`);
-await db.execute(sql`DELETE FROM orgs WHERE sid = ${SID}`);
-await db.execute(sql`DELETE FROM users WHERE handle IN ('_org_boss','_org_hand','_org_nobody')`);
+const SID = "ZZTESTORG";
+const HANDLES = sql.join(
+  ["_org_boss", "_org_hand", "_org_grunt", "_org_out"].map((h) => sql`${h}`),
+  sql`, `,
+);
+async function wipe() {
+  const mine = sql`(SELECT id FROM users WHERE handle IN (${HANDLES}))`;
+  await db.execute(sql`DELETE FROM org_proposal_approvals WHERE member_id IN ${mine}`);
+  await db.execute(sql`DELETE FROM org_proposals WHERE proposed_by_id IN ${mine}`);
+  await db.execute(sql`DELETE FROM org_events WHERE org_id IN (SELECT id FROM orgs WHERE sid IN (${sql`${SID}`}, ${sql`${"ZZOTHER"}`}))`);
+  await db.execute(sql`DELETE FROM org_verifications WHERE claimant_id IN ${mine}`);
+  await db.execute(sql`DELETE FROM org_members WHERE user_id IN ${mine}`);
+  await db.execute(sql`DELETE FROM orgs WHERE sid IN (${sql`${SID}`}, ${sql`${"ZZOTHER"}`})`);
+  await db.execute(sql`DELETE FROM users WHERE handle IN (${HANDLES})`);
+}
+await wipe();
 
-async function mkUser(handle: string, mainOrg: string | null) {
+async function mkUser(handle: string) {
   const [u] = await db
     .insert(users)
-    .values({
-      handle,
-      displayName: handle,
-      isVerified: true,
-      rsiVerifiedAt: new Date(),
-      mainOrgSid: mainOrg,
-      auecBalance: 1_000_000,
-    })
+    .values({ handle, displayName: handle, isVerified: true, rsiVerifiedAt: new Date(), auecBalance: 0 })
     .returning();
   return u!;
 }
-const boss = await mkUser("_org_boss", SID);
-const hand = await mkUser("_org_hand", SID);
-const nobody = await mkUser("_org_nobody", null);
+const boss = await mkUser("_org_boss");
+const hand = await mkUser("_org_hand");
+const grunt = await mkUser("_org_grunt");
+const outsider = await mkUser("_org_out");
 
-// --- founding is gated on the RSI profile ---------------------------------
-const wrongSid = await createOrg(db, { sid: "OTHERORG", name: "Not mine", founderId: boss.id });
-ok("can't found an org you don't belong to", !wrongSid.ok);
+/** A dossier reading, as the parser would produce it. */
+const profile = (sid: string | null, rank: string | null, stars: number | null): RsiProfile => ({
+  handle: "x",
+  displayName: "x",
+  bio: null,
+  enlistedAt: new Date("2015-01-01"),
+  citizenRecord: null,
+  mainOrgSid: sid,
+  avatarUrl: null,
+  mainOrgName: sid ? "Test Org" : null,
+  mainOrgRank: rank,
+  mainOrgRankStars: stars,
+  mainOrgLogoUrl: null,
+  mainOrgVisibility: sid ? "visible" : "none",
+});
 
-const noProfile = await createOrg(db, { sid: SID, name: "Test", founderId: nobody.id });
-ok("can't found without the SID on your profile", !noProfile.ok);
+// --- the roster is derived -------------------------------------------------
+await syncMembershipFromProfile(db, { userId: hand.id, profile: profile(SID, "Beta", 3) });
+let org = await getOrgBySid(db, SID, hand.id);
+ok("an org appears from the first member's profile", !!org && org.status === "derived");
+ok("and it cannot trade yet", org?.canTrade === false);
 
-const made = await createOrg(db, { sid: SID, name: "Test Org", founderId: boss.id });
-ok("founder with a matching main org can create it", made.ok);
-const orgId = made.ok ? made.orgId! : "";
+await syncMembershipFromProfile(db, { userId: boss.id, profile: profile(SID, "Alpha", 5) });
+await syncMembershipFromProfile(db, { userId: grunt.id, profile: profile(SID, "Recruit", 1) });
+const roster = await listOrgMembers(db, org!.id);
+ok("everyone naming it lands on the roster", roster.length === 3);
+ok("ranks come off the dossier", roster.find((m) => m.userId === boss.id)?.rsiRankStars === 5);
 
-const dupe = await createOrg(db, { sid: SID, name: "Test Org", founderId: hand.id });
-ok("a SID can only be registered once", !dupe.ok);
+const orgId = org!.id;
+const gateBefore = await canActForOrg(db, { orgId, userId: boss.id, amount: 1 });
+ok("an unverified org can't spend at all", !gateBefore.allowed);
+ok("and it says why", (gateBefore.reason ?? "").includes("leadership"));
 
-// --- treasury and delegation ----------------------------------------------
-await setOrgTreasury(db, { orgId, actorId: boss.id, treasury: 200_000_000 });
-await setOrgMember(db, { orgId, actorId: boss.id, userId: hand.id, role: "trader", spendLimit: 10_000_000 });
+// --- the claim belongs to the highest-ranked member -------------------------
+ok("the presumed leader is the highest-ranked", (await presumedLeader(db, orgId)) === boss.id);
+const wrongClaim = await startOrgVerification(db, { orgId, claimantId: grunt.id, code: "KCXORG-AAA-AAA" });
+ok("a junior member can't open the claim", !wrongClaim.ok);
 
-const outsider = await canSpendOrgFunds(db, { orgId, userId: nobody.id, amount: 1 });
-ok("a non-member can't spend org funds", !outsider.allowed);
+const claim = await startOrgVerification(db, { orgId, claimantId: boss.id, code: "KCXORG-AAA-AAA" });
+ok("the presumed leader can", claim.ok);
+const live = await liveOrgVerification(db, orgId);
+ok("the claim is live", live?.claimantId === boss.id);
 
-const withinBoth = await canSpendOrgFunds(db, { orgId, userId: hand.id, amount: 5_000_000 });
-ok("a trader can spend inside their limit", withinBoth.allowed);
+// The charter fetch itself is exercised by hand; here we take the code as found.
+await completeOrgVerification(db, { verificationId: live!.id, logoFilename: null });
+org = await getOrgBySid(db, SID, boss.id);
+ok("verifying makes the claimant president", org?.charterHolderId === boss.id && org?.myRole === "president");
+ok("and the org can now trade", org?.canTrade === true);
 
-const overLimit = await canSpendOrgFunds(db, { orgId, userId: hand.id, amount: 50_000_000 });
-ok("the delegated limit binds even though the treasury covers it", !overLimit.allowed);
-ok("and it says so specifically", (overLimit.reason ?? "").includes("delegated limit"));
+// --- the president overrides the ranking ------------------------------------
+await setOrgTreasury(db, { orgId, actorId: boss.id, treasury: 100_000_000 });
+const notPresident = await setOrgTreasury(db, { orgId, actorId: hand.id, treasury: 5 });
+ok("nobody else can set the treasury", !notPresident.ok);
 
-const overTreasury = await canSpendOrgFunds(db, { orgId, userId: boss.id, amount: 500_000_000 });
-ok("the treasury binds an owner with no cap", !overTreasury.allowed);
+await setOrgMemberRole(db, { orgId, actorId: boss.id, userId: grunt.id, role: "treasurer", spendLimit: 10_000_000 });
+const gruntGate = await canActForOrg(db, { orgId, userId: grunt.id, amount: 5_000_000 });
+ok("the president can promote the LOWEST-ranked member to treasurer", gruntGate.allowed);
+const gruntOver = await canActForOrg(db, { orgId, userId: grunt.id, amount: 50_000_000 });
+ok("their delegated limit still binds", !gruntOver.allowed);
 
-// --- commitments reduce both ceilings --------------------------------------
-const [season] = await db.select().from(gameVersions).where(eq(gameVersions.status, "active"));
-const [ad] = await db
-  .insert(bazaarListings)
-  .values({
-    sellerId: hand.id,
-    orgId,
-    intent: "buy",
-    seasonId: season!.id,
-    title: "_org test wanted ad",
-    category: "ships",
-    listingType: "buy_now",
-    buyNowPrice: 8_000_000,
-    quantity: 1,
-    remainingQuantity: 1,
-    expiresAt: new Date(Date.now() + 86_400_000),
-  })
-  .returning();
+const handGate = await canActForOrg(db, { orgId, userId: hand.id, amount: 1 });
+ok("a plain member can't spend despite 3 stars", !handGate.allowed);
 
-const afterAd = await canSpendOrgFunds(db, { orgId, userId: hand.id, amount: 5_000_000 });
-ok("a live org wanted ad eats into the member's headroom", !afterAd.allowed && afterAd.memberAvailable === 2_000_000);
+const selfPromote = await setOrgMemberRole(db, { orgId, actorId: hand.id, userId: hand.id, role: "treasurer" });
+ok("members can't promote themselves", !selfPromote.ok);
 
-const bossStillFine = await canSpendOrgFunds(db, { orgId, userId: boss.id, amount: 100_000_000 });
-ok("the org treasury absorbs it without blocking others", bossStillFine.allowed);
-ok("org availability dropped by the ad", bossStillFine.orgAvailable === 200_000_000 - 8_000_000);
+const addOutsider = await setOrgMemberRole(db, { orgId, actorId: boss.id, userId: outsider.id, role: "treasurer" });
+ok("you can't add somebody who isn't on the RSI roster", !addOutsider.ok);
 
-// --- treasury can't be cut below commitments -------------------------------
-const cut = await setOrgTreasury(db, { orgId, actorId: boss.id, treasury: 1_000_000 });
-ok("treasury can't drop below what's committed", !cut.ok);
+// --- authority goes stale ---------------------------------------------------
+await db.execute(sql`
+  UPDATE org_members SET confirmed_at = now() - interval '${sql.raw(String(ORG_AUTHORITY_STALE_DAYS + 5))} days'
+  WHERE org_id = ${orgId}::uuid AND user_id = ${grunt.id}::uuid`);
+const stale = await canActForOrg(db, { orgId, userId: grunt.id, amount: 1_000_000 });
+ok("stale authority stops spending", !stale.allowed);
+await syncMembershipFromProfile(db, { userId: grunt.id, profile: profile(SID, "Recruit", 1) });
+const refreshed = await canActForOrg(db, { orgId, userId: grunt.id, amount: 1_000_000 });
+ok("re-verifying restores it", refreshed.allowed);
 
-// --- membership rules ------------------------------------------------------
-const selfPromote = await setOrgMember(db, { orgId, actorId: hand.id, userId: hand.id, role: "owner" });
-ok("a trader can't promote themselves", !selfPromote.ok);
+// --- leaving the org --------------------------------------------------------
+await syncMembershipFromProfile(db, { userId: hand.id, profile: profile("ZZOTHER", "Grunt", 1) });
+const afterLeave = await listOrgMembers(db, orgId);
+ok("naming a different org removes you from the old roster", !afterLeave.some((m) => m.userId === hand.id));
 
-const dropCommitted = await removeOrgMember(db, { orgId, actorId: boss.id, userId: hand.id });
-ok("can't remove someone still holding org commitments", !dropCommitted.ok);
+// --- the board --------------------------------------------------------------
+await setOrgMemberRole(db, { orgId, actorId: boss.id, userId: grunt.id, isBoardMember: true });
+await setOrgBoardRules(db, { orgId, actorId: boss.id, threshold: 1, minValue: 1_000_000 });
 
-const lastOwner = await removeOrgMember(db, { orgId, actorId: boss.id, userId: boss.id });
-ok("an org can't be left without an owner", !lastOwner.ok);
+const small = await canActForOrg(db, { orgId, userId: grunt.id, amount: 500_000 });
+ok("below the minimum the board isn't involved", small.allowed && !small.needsBoard);
+const big = await canActForOrg(db, { orgId, userId: grunt.id, amount: 5_000_000 });
+ok("at or above it, the board is", big.allowed && big.needsBoard && big.requiredApprovals === 1);
 
-const standing = await orgStanding(db, orgId);
-ok("a new org has no trading record", standing.undertaken === 0 && standing.completionPct === null);
+const proposal = await createOrgProposal(db, {
+  orgId,
+  proposedById: grunt.id,
+  kind: "bazaar_listing",
+  value: 5_000_000,
+  summary: "test",
+  payload: {},
+  requiredApprovals: big.requiredApprovals,
+});
+ok("a proposal opens", proposal.ok);
+const pid = proposal.ok ? proposal.proposalId : "";
 
-// --- teardown --------------------------------------------------------------
-await db.execute(sql`DELETE FROM bazaar_events WHERE listing_id = ${ad!.id}::uuid`);
-await db.execute(sql`DELETE FROM bazaar_listings WHERE id = ${ad!.id}::uuid`);
-await db.execute(sql`DELETE FROM org_events WHERE org_id = ${orgId}::uuid`);
-await db.execute(sql`DELETE FROM org_members WHERE org_id = ${orgId}::uuid`);
-await db.execute(sql`DELETE FROM orgs WHERE id = ${orgId}::uuid`);
-await db.execute(sql`DELETE FROM users WHERE handle IN ('_org_boss','_org_hand','_org_nobody')`);
+const selfVote = await voteOnOrgProposal(db, { proposalId: pid, userId: grunt.id, approve: true });
+ok("the proposer can't vote on their own proposal", !selfVote.ok);
+const outsiderVote = await voteOnOrgProposal(db, { proposalId: pid, userId: outsider.id, approve: true });
+ok("a non-board member can't vote", !outsiderVote.ok);
+
+const bossVote = await voteOnOrgProposal(db, { proposalId: pid, userId: boss.id, approve: true });
+ok("a board member carries it", bossVote.ok && bossVote.readyToExecute);
+
+const held = await canActForOrg(db, { orgId, userId: boss.id, amount: 100_000_000 });
+ok("an open proposal holds the treasury against it", !held.allowed);
+
+// --- suspension -------------------------------------------------------------
+await modSetOrgSuspended(db, { orgId, moderatorId: boss.id, suspended: true, reason: "test" });
+const suspended = await canActForOrg(db, { orgId, userId: boss.id, amount: 1 });
+ok("a suspended org stops trading", !suspended.allowed);
+await modSetOrgSuspended(db, { orgId, moderatorId: boss.id, suspended: false });
+
+// --- leadership transfer ----------------------------------------------------
+const moved = await transferOrgLeadership(db, { orgId, actorId: boss.id, toUserId: grunt.id });
+ok("the president can hand leadership on", moved.ok);
+const afterMove = await getOrgBySid(db, SID, grunt.id);
+ok("and the successor is president", afterMove?.charterHolderId === grunt.id && afterMove?.myRole === "president");
+
+await wipe();
 console.log("cleaned up");
-
 await closeDb();
 process.exit(0);

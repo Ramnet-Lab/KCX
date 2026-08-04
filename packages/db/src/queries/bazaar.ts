@@ -92,6 +92,11 @@ export type BazaarListingDto = {
   id: string;
   /** "sell" = for sale, "buy" = a standing wanted ad backed by committed aUEC. */
   intent: string;
+  /** Set when the listing is the org's rather than the poster's own. */
+  orgId: string | null;
+  orgSid: string | null;
+  orgName: string | null;
+  orgLogoFilename: string | null;
   title: string;
   /** Catalogue entry this listing is of, when the seller named one. */
   itemId: number | null;
@@ -152,6 +157,10 @@ export type BazaarListOptions = {
 type ListingRow = {
   id: string;
   intent: string;
+  org_id: string | null;
+  org_sid: string | null;
+  org_name: string | null;
+  org_logo: string | null;
   title: string;
   item_id: string | null;
   item_name: string | null;
@@ -189,6 +198,10 @@ function toListingDto(r: ListingRow, viewer: string | null, standing: BazaarStan
   return {
     id: r.id,
     intent: r.intent,
+    orgId: r.org_id,
+    orgSid: r.org_sid,
+    orgName: r.org_name,
+    orgLogoFilename: r.org_logo,
     title: r.title,
     itemId: r.item_id != null ? Number(r.item_id) : null,
     itemName: r.item_name,
@@ -237,6 +250,7 @@ function toListingDto(r: ListingRow, viewer: string | null, standing: BazaarStan
 function listingSelect(viewer: string | null) {
   return sql`
     SELECT l.id::text, l.intent, l.title, l.item_id::text, it.name AS item_name,
+           l.org_id::text, og.sid AS org_sid, og.name AS org_name, og.logo_filename AS org_logo,
            l.description, l.category, l.listing_type,
            l.buy_now_price::text, l.start_price::text, l.current_bid::text,
            l.current_bidder_id::text, hb.display_name AS current_bidder_name,
@@ -253,6 +267,7 @@ function listingSelect(viewer: string | null) {
     LEFT JOIN users hb ON hb.id = l.current_bidder_id
     LEFT JOIN locations loc ON loc.id = l.location_id
     LEFT JOIN bazaar_items it ON it.id = l.item_id
+    LEFT JOIN orgs og ON og.id = l.org_id
     LEFT JOIN LATERAL (
       SELECT array_agg(i.filename ORDER BY i.sort_index, i.id) AS files
       FROM bazaar_listing_images i WHERE i.listing_id = l.id
