@@ -1,4 +1,4 @@
-import { getDb, passkeys, users } from "@kcx/db";
+import { getDb, isBanned, passkeys, users } from "@kcx/db";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     const result = await verifyAuthentication(response);
     if (!result.ok) return NextResponse.json({ error: result.message }, { status: 401 });
     const [user] = await getDb().select().from(users).where(eq(users.id, result.userId));
-    if (!user || user.bannedAt) return NextResponse.json({ error: "Account unavailable." }, { status: 403 });
+    if (!user || isBanned(user)) return NextResponse.json({ error: "Account unavailable." }, { status: 403 });
     await createSession(user.id);
     await logAuthEvent("login", { userId: user.id, handle: user.handle, detail: "passkey" });
     return NextResponse.json({ ok: true, user: { id: user.id, handle: user.handle, displayName: user.displayName } });

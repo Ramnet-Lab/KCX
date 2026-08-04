@@ -1,4 +1,4 @@
-import { authEvents, authSessions, getDb, users } from "@kcx/db";
+import { authEvents, authSessions, getDb, isBanned, users } from "@kcx/db";
 import { and, eq, gt, sql } from "drizzle-orm";
 import { createHash, randomBytes } from "node:crypto";
 import { cookies, headers } from "next/headers";
@@ -74,7 +74,7 @@ export async function currentUser(): Promise<SessionUser | null> {
         .from(authSessions)
         .innerJoin(users, eq(users.id, authSessions.userId))
         .where(and(eq(authSessions.tokenHash, hashToken(token)), gt(authSessions.expiresAt, new Date())));
-      if (row?.user && !row.user.bannedAt) {
+      if (row?.user && !isBanned(row.user)) {
         if (Date.now() - row.lastSeenAt.getTime() > TOUCH_INTERVAL_MS) {
           await db
             .update(authSessions)
@@ -90,7 +90,7 @@ export async function currentUser(): Promise<SessionUser | null> {
       const devId = jar.get("kcx_uid")?.value;
       if (devId && /^[0-9a-f-]{36}$/i.test(devId)) {
         const [user] = await db.select().from(users).where(eq(users.id, devId));
-        if (user && !user.bannedAt) return user;
+        if (user && !isBanned(user)) return user;
       }
     }
     return null;

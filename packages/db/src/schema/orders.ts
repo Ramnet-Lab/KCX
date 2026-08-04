@@ -63,7 +63,15 @@ export const users = pgTable("users", {
    * buy orders against, so it must live server-side, not in the browser.
    */
   auecBalance: bigint("auec_balance", { mode: "number" }).notNull().default(0),
+  /** When a ban was applied. Presence alone does NOT mean banned — see bannedUntil. */
   bannedAt: timestamp("banned_at", { withTimezone: true }),
+  /**
+   * When the ban lifts. NULL alongside a set bannedAt means permanent.
+   *
+   * A ban is live when bannedAt is set AND (bannedUntil is null OR still in the future), so
+   * a timed ban expires on its own even if no sweep runs. Never test bannedAt by itself.
+   */
+  bannedUntil: timestamp("banned_until", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

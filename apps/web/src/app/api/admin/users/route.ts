@@ -1,4 +1,4 @@
-import { getDb, listUsersForMod, setUserBanned, setUserRole } from "@kcx/db";
+import { BAN_DURATIONS, banUserByHandle, getDb, listUsersForMod, setUserBanned, setUserRole } from "@kcx/db";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireMod } from "@/lib/require-mod";
@@ -6,16 +6,26 @@ import { requireMod } from "@/lib/require-mod";
 export const dynamic = "force-dynamic";
 
 const banInput = z.object({
-  action: z.enum(["ban", "unban"]),
-  userId: z.string().uuid(),
+  action: z.literal("ban"),
+  /** Either identifier works: moderators often have the name, not the row. */
+  userId: z.string().uuid().optional(),
+  handle: z.string().trim().min(3).max(60).optional(),
+  duration: z.enum(BAN_DURATIONS),
+  reason: z.string().trim().max(1000).optional(),
+});
+const unbanInput = z.object({
+  action: z.literal("unban"),
+  userId: z.string().uuid().optional(),
+  handle: z.string().trim().min(3).max(60).optional(),
   reason: z.string().trim().max(1000).optional(),
 });
 const roleInput = z.object({
-  action: z.enum(["grant_mod", "revoke_mod"]),
+  action: z.literal("set_role"),
   userId: z.string().uuid(),
+  role: z.enum(["user", "mod", "admin"]),
   reason: z.string().trim().max(1000).optional(),
 });
-const input = z.discriminatedUnion("action", [banInput, roleInput]);
+const input = z.discriminatedUnion("action", [banInput, unbanInput, roleInput]);
 
 export async function GET(request: Request) {
   const gate = await requireMod();
@@ -39,27 +49,45 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
   const parsed = input.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid request" }, { status: 400 });
+  }
 
-  const isRoleChange = parsed.data.action === "grant_mod" || parsed.data.action === "revoke_mod";
-  const gate = await requireMod({ adminOnly: isRoleChange });
+  // Bans are moderator work; handing out roles is not.
+  const gate = await requireMod({ adminOnly: parsed.data.action === "set_role" });
   if (gate.response) return gate.response;
 
   try {
     const db = getDb();
-    const result = isRoleChange
-      ? await setUserRole(db, {
-          moderatorId: gate.user.id,
-          userId: parsed.data.userId,
-          role: parsed.data.action === "grant_mod" ? "mod" : "user",
-          reason: parsed.data.reason,
-        })
-      : await setUserBanned(db, {
-          moderatorId: gate.user.id,
-          userId: parsed.data.userId,
-          banned: parsed.data.action === "ban",
-          reason: parsed.data.reason,
-        });
+    let result: Awaited<ReturnType<typeof setUserBanned>>;
+
+    if (parsed.data.action === "set_role") {
+      result = await setUserRole(db, {
+        moderatorId: gate.user.id,
+        userId: parsed.data.userId,
+        role: parsed.data.role,
+        reason: parsed.data.reason,
+      });
+    } else {
+      const duration = parsed.data.action === "ban" ? parsed.data.duration : null;
+      if (!parsed.data.userId && !parsed.data.handle) {
+        return NextResponse.json({ error: "Give a handle or a user id" }, { status: 400 });
+      }
+      result = parsed.data.userId
+        ? await setUserBanned(db, {
+            moderatorId: gate.user.id,
+            userId: parsed.data.userId,
+            duration,
+            reason: parsed.data.reason,
+          })
+        : await banUserByHandle(db, {
+            moderatorId: gate.user.id,
+            handle: parsed.data.handle!,
+            duration,
+            reason: parsed.data.reason,
+          });
+    }
+
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: 409 });
     return NextResponse.json({ ok: true });
   } catch (err) {

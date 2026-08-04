@@ -1,5 +1,6 @@
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import type { Db } from "../client";
+import { ACTIVE_BAN, type BanDuration, banDurationMs, banSummary, isBanned } from "./bans";
 import { contractBreaches, contractEvents, serviceContracts } from "../schema/contracts";
 import { moderationActions } from "../schema/moderation";
 import { users } from "../schema/orders";
@@ -58,7 +59,8 @@ export async function moderationOverview(db: Db): Promise<ModOverview> {
       (SELECT count(*) FROM service_contracts
          WHERE visibility = 'classified'
            AND status IN ('open','bidding','awarded','in_progress'))::text      AS classified_live,
-      (SELECT count(*) FROM users WHERE banned_at IS NOT NULL)::text            AS banned_users,
+      (SELECT count(*) FROM users u2 WHERE u2.banned_at IS NOT NULL
+         AND (u2.banned_until IS NULL OR u2.banned_until > now()))::text        AS banned_users,
       (SELECT count(*) FROM users)::text                                        AS total_users
   `);
   const r = res.rows[0] ?? {};
@@ -137,6 +139,8 @@ export type ModUserRow = {
   role: string;
   isVerified: boolean;
   bannedAt: string | null;
+  bannedUntil: string | null;
+  banLabel: string | null;
   breaches: number;
   contractsDone: number;
   createdAt: string;
@@ -146,9 +150,9 @@ export async function listUsersForMod(db: Db, search?: string | null): Promise<M
   const term = search?.trim().toLowerCase();
   const res = await db.execute<{
     id: string; handle: string; display_name: string; role: string; is_verified: boolean;
-    banned_at: string | Date | null; breaches: number; contracts_done: number; created_at: string | Date;
+    banned_at: string | Date | null; banned_until: string | Date | null; breaches: number; contracts_done: number; created_at: string | Date;
   }>(sql`
-    SELECT u.id::text, u.handle, u.display_name, u.role, u.is_verified, u.banned_at, u.created_at,
+    SELECT u.id::text, u.handle, u.display_name, u.role, u.is_verified, u.banned_at, u.banned_until, u.created_at,
            (SELECT count(*) FROM contract_breaches cb
               WHERE cb.accused_id = u.id AND cb.status <> 'dismissed')::int AS breaches,
            (SELECT count(*) FROM service_contracts sc
@@ -166,63 +170,112 @@ export async function listUsersForMod(db: Db, search?: string | null): Promise<M
     role: r.role,
     isVerified: r.is_verified,
     bannedAt: r.banned_at ? new Date(r.banned_at).toISOString() : null,
+    bannedUntil: r.banned_until ? new Date(r.banned_until).toISOString() : null,
+    banLabel: banSummary({ bannedAt: r.banned_at, bannedUntil: r.banned_until }),
     breaches: r.breaches,
     contractsDone: r.contracts_done,
     createdAt: new Date(r.created_at).toISOString(),
   }));
 }
 
-/** Ban or reinstate. A ban stops sign-in outright; existing sessions are dropped with it. */
+/**
+ * Ban for a fixed term or permanently, or reinstate.
+ *
+ * `duration` of null lifts the ban. A timed ban records when it ends; the checks that matter
+ * compare against that time, so it expires on its own whether or not a sweep ever runs.
+ */
 export async function setUserBanned(
   db: Db,
-  opts: { moderatorId: string; userId: string; banned: boolean; reason?: string },
+  opts: { moderatorId: string; userId: string; duration: BanDuration | null; reason?: string },
 ): Promise<ModResult> {
   return db.transaction(async (tx) => {
     const [target] = await tx.select().from(users).where(eq(users.id, opts.userId));
     if (!target) return { ok: false as const, error: "No such user" };
     if (target.id === opts.moderatorId) return { ok: false as const, error: "You can't ban yourself" };
-    if (target.role === "admin") return { ok: false as const, error: "Admins can't be banned from here" };
+    if (target.role === "admin") return { ok: false as const, error: "Admins can't be banned" };
+
+    const banning = opts.duration !== null;
+    const ms = banning ? banDurationMs(opts.duration!) : null;
 
     await tx
       .update(users)
-      .set({ bannedAt: opts.banned ? new Date() : null })
+      .set({
+        bannedAt: banning ? new Date() : null,
+        bannedUntil: banning && ms !== null ? new Date(Date.now() + ms) : null,
+      })
       .where(eq(users.id, opts.userId));
     // Leaving live sessions alive would mean a banned account keeps working until its
     // cookie expires, which is not a ban.
-    if (opts.banned) {
+    if (banning) {
       await tx.execute(sql`DELETE FROM auth_sessions WHERE user_id = ${opts.userId}::uuid`);
     }
     await logAction(tx, {
       moderatorId: opts.moderatorId,
-      action: opts.banned ? "user_banned" : "user_unbanned",
+      action: banning ? "user_banned" : "user_unbanned",
       targetType: "user",
       targetId: opts.userId,
       targetUserId: opts.userId,
-      reason: opts.reason,
+      // The term is part of the record — "banned" alone doesn't say for how long.
+      reason: banning ? `[${opts.duration}] ${opts.reason ?? ""}`.trim() : (opts.reason ?? null),
     });
     return { ok: true as const };
   });
 }
 
-/** Grant or revoke moderator. Admin-only at the route; guarded again here. */
+/** Ban by RSI handle, for when a moderator has the name and not the row. */
+export async function banUserByHandle(
+  db: Db,
+  opts: { moderatorId: string; handle: string; duration: BanDuration | null; reason?: string },
+): Promise<ModResult> {
+  const handle = opts.handle.trim().toLowerCase();
+  const [target] = await db.select({ id: users.id }).from(users).where(eq(users.handle, handle));
+  if (!target) return { ok: false, error: `No account with the handle "${handle}"` };
+  return setUserBanned(db, {
+    moderatorId: opts.moderatorId,
+    userId: target.id,
+    duration: opts.duration,
+    reason: opts.reason,
+  });
+}
+
+/**
+ * Set someone's role, including admin. Admin-only at the route; guarded again here.
+ *
+ * Demoting an existing admin is allowed — an owner needs to be able to undo an appointment —
+ * but never the last one, and never your own. Locking every admin out of a system whose only
+ * other route back in is a container restart is not a mistake worth allowing.
+ */
 export async function setUserRole(
   db: Db,
-  opts: { moderatorId: string; userId: string; role: "user" | "mod"; reason?: string },
+  opts: { moderatorId: string; userId: string; role: "user" | "mod" | "admin"; reason?: string },
 ): Promise<ModResult> {
   return db.transaction(async (tx) => {
     const [target] = await tx.select().from(users).where(eq(users.id, opts.userId));
     if (!target) return { ok: false as const, error: "No such user" };
-    if (target.role === "admin") return { ok: false as const, error: "Can't change an admin's role" };
     if (target.id === opts.moderatorId) return { ok: false as const, error: "You can't change your own role" };
+    if (target.role === opts.role) return { ok: false as const, error: `Already ${opts.role}` };
+
+    if (target.role === "admin" && opts.role !== "admin") {
+      const admins = await tx
+        .select({ n: sql<string>`count(*)::text` })
+        .from(users)
+        .where(eq(users.role, "admin"));
+      if (Number(admins[0]?.n ?? 0) <= 1) {
+        return { ok: false as const, error: "That's the last admin — promote someone else first" };
+      }
+    }
+    if (opts.role !== "user" && isBanned(target)) {
+      return { ok: false as const, error: "Reinstate this account before giving it a role" };
+    }
 
     await tx.update(users).set({ role: opts.role }).where(eq(users.id, opts.userId));
     await logAction(tx, {
       moderatorId: opts.moderatorId,
-      action: opts.role === "mod" ? "role_granted" : "role_revoked",
+      action: opts.role === "user" ? "role_revoked" : "role_granted",
       targetType: "user",
       targetId: opts.userId,
       targetUserId: opts.userId,
-      reason: opts.reason,
+      reason: `[${target.role} → ${opts.role}] ${opts.reason ?? ""}`.trim(),
     });
     return { ok: true as const };
   });
@@ -338,7 +391,7 @@ export async function ensureBootstrapAdmin(db: Db, handle: string | undefined): 
       and(
         eq(users.handle, target),
         sql`${users.role} IN ('user','mod')`,
-        isNull(users.bannedAt),
+        sql`NOT ${ACTIVE_BAN}`,
       ),
     )
     .returning({ handle: users.handle });

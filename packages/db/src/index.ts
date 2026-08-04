@@ -3,6 +3,7 @@ export * from "./migrate";
 export * from "./realtime";
 export * from "./queries/mark";
 export * from "./queries/moderation";
+export * from "./queries/bans";
 export * from "./queries/collateral";
 export * from "./queries/contracts";
 export * from "./queries/index-series";

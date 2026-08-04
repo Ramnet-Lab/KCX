@@ -1,4 +1,4 @@
-import { authEvents, getDb, users } from "@kcx/db";
+import { authEvents, getDb, isBanned, users } from "@kcx/db";
 import { and, eq, gt, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -82,7 +82,7 @@ export async function POST(request: Request) {
       await logAuthEvent("login_failed", { userId: user?.id ?? null, handle, detail: "password" });
       return NextResponse.json({ error: "That handle and password don't match." }, { status: 401 });
     }
-    if (user.bannedAt) return NextResponse.json({ error: "Account unavailable." }, { status: 403 });
+    if (isBanned(user)) return NextResponse.json({ error: "Account unavailable." }, { status: 403 });
 
     await createSession(user.id);
     await logAuthEvent("login", { userId: user.id, handle, detail: "password" });

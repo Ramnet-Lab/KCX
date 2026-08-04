@@ -10,6 +10,7 @@ import {
   expireStaleContracts,
   closeContractBidding,
   ensureBootstrapAdmin,
+  liftExpiredBans,
   expireContractAwards,
   expireServiceContracts,
   runMigrations,
@@ -121,6 +122,10 @@ async function main() {
     if (jobs > 0) console.log(`[contracts] ${jobs} service contract(s) passed their deadline`);
     const n = await expireUnfilledOrders(db);
     if (n > 0) console.log(`[orders] ${n} order(s) hit their fill-by deadline → expired_unfilled`);
+    // Cosmetic: isBanned() already treats an elapsed ban as lifted, but leaving served bans
+    // in the data makes the mod console lie about who is currently banned.
+    const unbanned = await liftExpiredBans(db);
+    if (unbanned > 0) console.log(`[bans] ${unbanned} timed ban(s) expired`);
   });
 
   // Boot-time catch-up: if the latest capture is older than one interval (+ grace),

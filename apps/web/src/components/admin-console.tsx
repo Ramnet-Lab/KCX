@@ -34,9 +34,17 @@ type ModUser = {
   role: string;
   isVerified: boolean;
   bannedAt: string | null;
+  bannedUntil: string | null;
+  banLabel: string | null;
   breaches: number;
   contractsDone: number;
 };
+
+const BAN_OPTIONS = [
+  { value: "24h", label: "24 hours" },
+  { value: "7d", label: "7 days" },
+  { value: "permanent", label: "Permanent" },
+] as const;
 
 type LogRow = {
   id: number;
@@ -179,7 +187,7 @@ export function AdminConsole({ isAdmin }: { isAdmin: boolean }) {
           busy={busy}
           search={search}
           onSearch={setSearch}
-          onAction={(userId, action, reason) => send("/api/admin/users", { action, userId, reason }, userId)}
+          onAction={(payload, key) => send("/api/admin/users", payload, key)}
         />
       )}
 
@@ -306,10 +314,70 @@ function UserPanel({
   busy: string | null;
   search: string;
   onSearch: (v: string) => void;
-  onAction: (userId: string, action: string, reason: string) => Promise<boolean>;
+  onAction: (payload: Record<string, unknown>, key: string) => Promise<boolean>;
 }) {
+  const [banHandle, setBanHandle] = useState("");
+  const [banDuration, setBanDuration] = useState<string>("24h");
+  const [banReason, setBanReason] = useState("");
+  const [rowDuration, setRowDuration] = useState<Record<string, string>>({});
+
   return (
     <div>
+      {/* Ban by handle: a moderator usually has the name from a report, not a row. */}
+      <div className="mb-4 rounded border border-danger/40 bg-danger/5 p-3">
+        <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-danger">Ban by handle</p>
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="flex-1 min-w-[10rem]">
+            <span className="text-[10px] uppercase tracking-wider text-ink-faint">RSI handle</span>
+            <input
+              value={banHandle}
+              onChange={(e) => setBanHandle(e.target.value)}
+              placeholder="e.g. ramnet"
+              className="mt-1 w-full rounded border border-line bg-bg px-2 py-1.5 text-xs text-ink placeholder:text-ink-faint focus:outline-none"
+            />
+          </label>
+          <label>
+            <span className="text-[10px] uppercase tracking-wider text-ink-faint">Duration</span>
+            <select
+              value={banDuration}
+              onChange={(e) => setBanDuration(e.target.value)}
+              className="mt-1 rounded border border-line bg-bg px-2 py-1.5 text-xs text-ink focus:outline-none"
+            >
+              {BAN_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex-1 min-w-[12rem]">
+            <span className="text-[10px] uppercase tracking-wider text-ink-faint">Reason</span>
+            <input
+              value={banReason}
+              onChange={(e) => setBanReason(e.target.value)}
+              placeholder="Logged against your name"
+              className="mt-1 w-full rounded border border-line bg-bg px-2 py-1.5 text-xs text-ink placeholder:text-ink-faint focus:outline-none"
+            />
+          </label>
+          <button
+            onClick={async () => {
+              const ok = await onAction(
+                { action: "ban", handle: banHandle.trim(), duration: banDuration, reason: banReason },
+                `handle:${banHandle}`,
+              );
+              if (ok) {
+                setBanHandle("");
+                setBanReason("");
+              }
+            }}
+            disabled={busy === `handle:${banHandle}` || banHandle.trim().length < 3}
+            className="tap rounded bg-danger/20 px-3 py-1.5 text-xs font-bold text-danger hover:bg-danger/30 disabled:opacity-40"
+          >
+            Ban
+          </button>
+        </div>
+      </div>
+
       <input
         value={search}
         onChange={(e) => onSearch(e.target.value)}
@@ -341,26 +409,57 @@ function UserPanel({
                 <td className={`num text-right ${u.breaches > 0 ? "font-bold text-danger" : "text-ink-faint"}`}>
                   {u.breaches}
                 </td>
-                <td className={u.bannedAt ? "font-bold text-danger" : "text-up"}>
-                  {u.bannedAt ? "banned" : "active"}
+                <td className={u.banLabel ? "font-bold text-danger" : "text-up"}>
+                  {u.banLabel ? `banned · ${u.banLabel}` : "active"}
                 </td>
                 <td className="py-2 text-right">
-                  <span className="flex flex-wrap justify-end gap-2">
-                    <button
-                      onClick={() => onAction(u.id, u.bannedAt ? "unban" : "ban", "")}
-                      disabled={busy === u.id || u.role === "admin"}
-                      className={`tap ${u.bannedAt ? "text-up" : "text-ink-faint hover:text-danger"} disabled:opacity-30`}
-                    >
-                      {u.bannedAt ? "reinstate" : "ban"}
-                    </button>
-                    {isAdmin && u.role !== "admin" && (
+                  <span className="flex flex-wrap items-center justify-end gap-2">
+                    {u.banLabel ? (
                       <button
-                        onClick={() => onAction(u.id, u.role === "mod" ? "revoke_mod" : "grant_mod", "")}
+                        onClick={() => onAction({ action: "unban", userId: u.id }, u.id)}
                         disabled={busy === u.id}
-                        className="tap text-accent hover:underline disabled:opacity-30"
+                        className="tap text-up hover:underline disabled:opacity-30"
                       >
-                        {u.role === "mod" ? "revoke mod" : "make mod"}
+                        reinstate
                       </button>
+                    ) : (
+                      <>
+                        <select
+                          value={rowDuration[u.id] ?? "24h"}
+                          onChange={(e) => setRowDuration((d) => ({ ...d, [u.id]: e.target.value }))}
+                          disabled={u.role === "admin"}
+                          aria-label={`Ban duration for ${u.handle}`}
+                          className="rounded border border-line bg-bg px-1 py-0.5 text-[11px] text-ink focus:outline-none disabled:opacity-30"
+                        >
+                          {BAN_OPTIONS.map((o) => (
+                            <option key={o.value} value={o.value}>
+                              {o.label}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() =>
+                            onAction({ action: "ban", userId: u.id, duration: rowDuration[u.id] ?? "24h" }, u.id)
+                          }
+                          disabled={busy === u.id || u.role === "admin"}
+                          className="tap text-ink-faint hover:text-danger disabled:opacity-30"
+                        >
+                          ban
+                        </button>
+                      </>
+                    )}
+                    {isAdmin && (
+                      <select
+                        value={u.role}
+                        onChange={(e) => onAction({ action: "set_role", userId: u.id, role: e.target.value }, u.id)}
+                        disabled={busy === u.id}
+                        aria-label={`Role for ${u.handle}`}
+                        className="rounded border border-line bg-bg px-1 py-0.5 text-[11px] text-accent focus:outline-none disabled:opacity-30"
+                      >
+                        <option value="user">user</option>
+                        <option value="mod">mod</option>
+                        <option value="admin">admin</option>
+                      </select>
                     )}
                   </span>
                 </td>
@@ -369,12 +468,11 @@ function UserPanel({
           </tbody>
         </table>
       </div>
-      {!isAdmin && (
-        <p className="mt-2 text-[11px] text-ink-faint">
-          Only an admin can grant or revoke moderator — a mod who can appoint mods can grow
-          their own faction.
-        </p>
-      )}
+      <p className="mt-2 text-[11px] text-ink-faint">
+        {isAdmin
+          ? "Changing a role takes effect immediately. You can't change your own, and the last admin can't be demoted."
+          : "Only an admin can change roles — a mod who can appoint mods can grow their own faction. Bans are yours to make."}
+      </p>
     </div>
   );
 }
