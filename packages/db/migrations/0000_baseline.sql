@@ -274,6 +274,17 @@ CREATE TABLE "users" (
 	CONSTRAINT "users_discord_id_unique" UNIQUE("discord_id")
 );
 --> statement-breakpoint
+CREATE TABLE "user_inventory" (
+	"user_id" uuid NOT NULL,
+	"item_id" bigint NOT NULL,
+	"quantity" integer DEFAULT 0 NOT NULL,
+	"note" text,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "user_inventory_user_id_item_id_pk" PRIMARY KEY("user_id","item_id"),
+	CONSTRAINT "user_inventory_quantity_non_negative" CHECK ("user_inventory"."quantity" >= 0)
+);
+--> statement-breakpoint
 CREATE TABLE "auth_events" (
 	"id" bigserial PRIMARY KEY NOT NULL,
 	"user_id" uuid,
@@ -716,6 +727,10 @@ CREATE TABLE "instalment_plans" (
 	"buyer_id" uuid NOT NULL,
 	"seller_id" uuid NOT NULL,
 	"proposed_by_id" uuid NOT NULL,
+	"principal" bigint NOT NULL,
+	"base_rate_bps" integer DEFAULT 0 NOT NULL,
+	"effective_rate_bps" integer DEFAULT 0 NOT NULL,
+	"interest_amount" bigint DEFAULT 0 NOT NULL,
 	"total_amount" bigint NOT NULL,
 	"instalment_count" smallint NOT NULL,
 	"interval_days" smallint NOT NULL,
@@ -727,7 +742,11 @@ CREATE TABLE "instalment_plans" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "instalment_plans_total_positive" CHECK ("instalment_plans"."total_amount" > 0),
-	CONSTRAINT "instalment_plans_count_range" CHECK ("instalment_plans"."instalment_count" BETWEEN 2 AND 12),
+	CONSTRAINT "instalment_plans_count_range" CHECK ("instalment_plans"."instalment_count" BETWEEN 2 AND 24),
+	CONSTRAINT "instalment_plans_principal_positive" CHECK ("instalment_plans"."principal" > 0),
+	CONSTRAINT "instalment_plans_rates_non_negative" CHECK ("instalment_plans"."base_rate_bps" >= 0 AND "instalment_plans"."effective_rate_bps" >= 0),
+	CONSTRAINT "instalment_plans_interest_non_negative" CHECK ("instalment_plans"."interest_amount" >= 0),
+	CONSTRAINT "instalment_plans_total_is_sum" CHECK ("instalment_plans"."total_amount" = "instalment_plans"."principal" + "instalment_plans"."interest_amount"),
 	CONSTRAINT "instalment_plans_interval_range" CHECK ("instalment_plans"."interval_days" BETWEEN 1 AND 30),
 	CONSTRAINT "instalment_plans_distinct_parties" CHECK ("instalment_plans"."buyer_id" <> "instalment_plans"."seller_id")
 );
@@ -823,6 +842,8 @@ ALTER TABLE "trades" ADD CONSTRAINT "trades_season_id_game_versions_id_fk" FOREI
 ALTER TABLE "trades" ADD CONSTRAINT "trades_cancelled_by_id_users_id_fk" FOREIGN KEY ("cancelled_by_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "user_holdings" ADD CONSTRAINT "user_holdings_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "user_holdings" ADD CONSTRAINT "user_holdings_commodity_id_commodities_id_fk" FOREIGN KEY ("commodity_id") REFERENCES "public"."commodities"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "user_inventory" ADD CONSTRAINT "user_inventory_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "user_inventory" ADD CONSTRAINT "user_inventory_item_id_bazaar_items_id_fk" FOREIGN KEY ("item_id") REFERENCES "public"."bazaar_items"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "auth_events" ADD CONSTRAINT "auth_events_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "auth_sessions" ADD CONSTRAINT "auth_sessions_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "passkeys" ADD CONSTRAINT "passkeys_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint

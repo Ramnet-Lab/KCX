@@ -1,6 +1,13 @@
 "use client";
 
 import type { InstalmentPlanDto } from "@kcx/db";
+import {
+  INSTALMENT_MAX_WINDOWS,
+  INSTALMENT_MIN_WINDOWS,
+  INSTALMENT_RATE_STEP_BPS,
+  formatRate,
+  quoteInstalments,
+} from "@kcx/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -45,13 +52,13 @@ export function InstalmentPanel({
   return (
     <div className="space-y-3">
       <div className="rounded border border-line bg-panel-2 px-3 py-2 text-[11px] leading-relaxed text-ink-faint">
-        <span className="font-bold text-ink-dim">How this works.</span> An instalment plan
-        changes <em>when</em> the money moves, never how much — no interest, no fees, aUEC
-        only, and KCX is not a party to it. Each payment is confirmed by both sides like any
-        other settlement.{" "}
-        <span className="text-ink">
-          The seller keeps the item until the final payment clears.
-        </span>{" "}
+        <span className="font-bold text-ink-dim">How this works.</span> The seller sets a rate
+        for waiting, shown in full before either side agrees and fixed once accepted. Longer
+        schedules cost more: two windows is the seller&apos;s rate, and each window after that
+        adds {formatRate(INSTALMENT_RATE_STEP_BPS)}. aUEC only, and KCX lends nothing and is
+        not a party — the buyer pays the seller directly. Each payment is confirmed by both
+        sides like any other settlement.{" "}
+        <span className="text-ink">The seller keeps the item until the final payment clears.</span>{" "}
         Nothing is delivered on a deposit.
       </div>
 
@@ -68,7 +75,7 @@ export function InstalmentPanel({
       {plans.length === 0 ? (
         <div className="rounded border border-dashed border-line p-8 text-center text-sm text-ink-faint">
           <p className="mb-1 text-ink">No instalment plans.</p>
-          <p>Propose one from a pending bazaar sale over 5,000,000 aUEC.</p>
+          <p>Propose one from a pending bazaar sale on your desk.</p>
         </div>
       ) : (
         plans.map((p) => <PlanCard key={p.id} plan={p} busy={busy} onPost={post} />)
@@ -110,6 +117,28 @@ function PlanCard({
         {p.instalmentCount} payments, {p.intervalDays} days apart ·{" "}
         <span className={p.status === "defaulted" ? "font-bold text-danger" : "text-ink-dim"}>{p.status}</span>
         {live && ` · ${fmtAuec(p.outstanding)} aUEC outstanding`}
+      </div>
+
+      {/* The two numbers a buyer wants side by side: what it costs, and what waiting costs. */}
+      <div className="mt-1 flex flex-wrap gap-x-4 text-[11px] text-ink-faint">
+        <span>
+          item <span className="num text-ink-dim">{fmtAuec(p.principal)}</span>
+        </span>
+        {p.interestAmount > 0 ? (
+          <span>
+            interest at <span className="text-ink-dim">{formatRate(p.effectiveRateBps)}</span>{" "}
+            <span className="num text-ink-dim">+{fmtAuec(p.interestAmount)}</span>
+            {p.effectiveRateBps !== p.baseRateBps && (
+              <span className="text-ink-faint">
+                {" "}
+                ({formatRate(p.baseRateBps)} asked, +{formatRate(p.effectiveRateBps - p.baseRateBps)} for the
+                longer schedule)
+              </span>
+            )}
+          </span>
+        ) : (
+          <span>no interest</span>
+        )}
       </div>
 
       {/* A plain progress bar: "3 of 8 paid" is the fact both parties check first. */}
@@ -200,15 +229,23 @@ function PlanCard({
 }
 
 /** Propose a schedule against a pending sale, from the sale row on the desk. */
-export function ProposeInstalments({ saleId, totalPrice }: { saleId: string; totalPrice: number }) {
+export function ProposeInstalments({
+  saleId,
+  totalPrice,
+  isSeller,
+}: {
+  saleId: string;
+  totalPrice: number;
+  /** Only the seller may name a rate; a buyer-side proposal is always at zero. */
+  isSeller: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [count, setCount] = useState(4);
   const [interval, setInterval] = useState(7);
+  const [ratePct, setRatePct] = useState("0");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
-
-  if (totalPrice < 5_000_000) return null;
 
   const submit = async () => {
     setBusy(true);
@@ -217,7 +254,13 @@ export function ProposeInstalments({ saleId, totalPrice }: { saleId: string; tot
       const res = await fetch("/api/instalments", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "propose", saleId, instalmentCount: count, intervalDays: interval }),
+        body: JSON.stringify({
+          action: "propose",
+          saleId,
+          instalmentCount: count,
+          intervalDays: interval,
+          ...(isSeller ? { rateBps } : {}),
+        }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -242,7 +285,11 @@ export function ProposeInstalments({ saleId, totalPrice }: { saleId: string; tot
     );
   }
 
-  const each = Math.floor(totalPrice / count);
+  // Priced by the same function the server uses, so the figure here and the figure in the
+  // schedule cannot disagree about what was agreed.
+  const rateBps = isSeller ? Math.max(0, Math.round(Number(ratePct) * 100)) : 0;
+  const quote = quoteInstalments(totalPrice, rateBps, count);
+
   return (
     <div className="mt-2 w-full rounded border border-line bg-panel-2 p-2">
       <div className="flex flex-wrap items-end gap-2">
@@ -250,10 +297,14 @@ export function ProposeInstalments({ saleId, totalPrice }: { saleId: string; tot
           <span className="block text-[10px] font-bold uppercase tracking-wider text-ink-faint">Payments</span>
           <input
             type="number"
-            min={2}
-            max={12}
+            min={INSTALMENT_MIN_WINDOWS}
+            max={INSTALMENT_MAX_WINDOWS}
             value={count}
-            onChange={(e) => setCount(Math.min(12, Math.max(2, Math.round(Number(e.target.value) || 2))))}
+            onChange={(e) =>
+              setCount(
+                Math.min(INSTALMENT_MAX_WINDOWS, Math.max(INSTALMENT_MIN_WINDOWS, Math.round(Number(e.target.value) || 2))),
+              )
+            }
             className="num mt-1 w-20 rounded border border-line bg-bg px-2 py-1 text-right text-xs text-ink focus:outline-none"
           />
         </label>
@@ -268,6 +319,21 @@ export function ProposeInstalments({ saleId, totalPrice }: { saleId: string; tot
             className="num mt-1 w-20 rounded border border-line bg-bg px-2 py-1 text-right text-xs text-ink focus:outline-none"
           />
         </label>
+        {isSeller && (
+          <label>
+            <span className="block text-[10px] font-bold uppercase tracking-wider text-ink-faint">
+              Your rate %
+            </span>
+            <input
+              type="number"
+              min={0}
+              step="0.25"
+              value={ratePct}
+              onChange={(e) => setRatePct(e.target.value)}
+              className="num mt-1 w-24 rounded border border-line bg-bg px-2 py-1 text-right text-xs text-ink focus:outline-none"
+            />
+          </label>
+        )}
         <button
           onClick={submit}
           disabled={busy}
@@ -279,11 +345,38 @@ export function ProposeInstalments({ saleId, totalPrice }: { saleId: string; tot
           cancel
         </button>
       </div>
-      <p className="mt-1.5 text-[11px] text-ink-faint">
-        About <span className="num text-ink-dim">{fmtAuec(each)}</span> aUEC every {interval} days.
-        No interest — the total is the sale price. The seller keeps the item until the last
-        payment clears.
-      </p>
+      <div className="mt-1.5 rounded border border-line bg-bg px-2 py-1.5 text-[11px] text-ink-faint">
+        <div className="flex flex-wrap gap-x-4">
+          <span>
+            item <span className="num text-ink-dim">{fmtAuec(quote.principal)}</span>
+          </span>
+          <span>
+            interest <span className="text-ink-dim">{formatRate(quote.effectiveRateBps)}</span>{" "}
+            <span className="num text-ink-dim">+{fmtAuec(quote.interest)}</span>
+          </span>
+          <span className="font-bold">
+            total <span className="num text-up">{fmtAuec(quote.total)}</span> aUEC
+          </span>
+        </div>
+        <div className="mt-0.5">
+          {quote.windows} payments of about{" "}
+          <span className="num text-ink-dim">{fmtAuec(quote.schedule[quote.schedule.length - 1] ?? 0)}</span>, every{" "}
+          {interval} days. The first carries the rounding.
+        </div>
+        {isSeller && quote.effectiveRateBps !== quote.baseRateBps && (
+          <div className="mt-0.5">
+            Your {formatRate(quote.baseRateBps)} covers {INSTALMENT_MIN_WINDOWS} windows; this schedule adds{" "}
+            {formatRate(quote.effectiveRateBps - quote.baseRateBps)} for the extra time.
+          </div>
+        )}
+        {!isSeller && (
+          <div className="mt-0.5">
+            You&apos;re proposing terms to the seller, so this carries no interest. They can decline
+            and put up their own rate.
+          </div>
+        )}
+        <div className="mt-0.5 text-ink-dim">The seller keeps the item until the last payment clears.</div>
+      </div>
       {error && <p className="mt-1 text-[11px] text-danger">{error}</p>}
     </div>
   );

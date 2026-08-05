@@ -2,6 +2,7 @@
 
 import type {
   BazaarListingDto,
+  InventoryRow,
   BazaarSaleDto,
   BazaarThreadDto,
   ContractDto,
@@ -13,6 +14,7 @@ import type {
 import { BAZAAR_CATEGORY_LABELS, type BazaarCategory, type OrderDto } from "@kcx/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { InventoryTab } from "@/components/inventory-tab";
 import { useMemo, useState } from "react";
 import { BazaarThreadPanel } from "@/components/bazaar-thread";
 import { InstalmentPanel, ProposeInstalments } from "@/components/instalments";
@@ -20,7 +22,7 @@ import { StarPicker } from "@/components/trader-standing";
 import { WatchlistPanel } from "@/components/watchlist";
 import { fmtAuec, timeLeft } from "@/lib/countdown";
 
-type Tab = "messages" | "selling" | "sales" | "contracts" | "orders" | "watchlist" | "instalments";
+type Tab = "messages" | "selling" | "inventory" | "sales" | "contracts" | "orders" | "watchlist" | "instalments";
 
 /**
  * The trader's own desk.
@@ -41,6 +43,7 @@ export function ManageDesk({
   plans,
   instalmentEligibility,
   pendingRatings,
+  inventory,
 }: {
   listings: BazaarListingDto[];
   sales: BazaarSaleDto[];
@@ -53,6 +56,7 @@ export function ManageDesk({
   plans: InstalmentPlanDto[];
   instalmentEligibility: { allowed: boolean; reason: string | null } | null;
   pendingRatings: { saleId: string; counterpartyName: string; title: string }[];
+  inventory: InventoryRow[];
 }) {
   // Conversations open first when any are waiting: somebody is holding a question, and an
   // unanswered buyer goes back to Discord and doesn't return.
@@ -113,6 +117,7 @@ export function ManageDesk({
   const TABS: { id: Tab; label: string; count: number }[] = [
     { id: "messages", label: "Messages", count: counts.messages },
     { id: "selling", label: "Selling", count: counts.selling },
+    { id: "inventory", label: "Inventory", count: inventory.length },
     { id: "sales", label: "Bazaar sales", count: counts.sales },
     { id: "contracts", label: "Contracts", count: counts.contracts },
     { id: "orders", label: "Market orders", count: counts.orders },
@@ -147,6 +152,7 @@ export function ManageDesk({
 
       {tab === "messages" && <MessagesTab threads={threads} onChanged={() => router.refresh()} />}
       {tab === "selling" && <SellingTab listings={listings} busy={busy} onAct={patch} />}
+      {tab === "inventory" && <InventoryTab initial={inventory} />}
       {tab === "sales" && <SalesTab sales={sales} busy={busy} onAct={patch} />}
       {tab === "contracts" && <ContractsTab contracts={serviceContracts} busy={busy} onAct={patch} />}
       {tab === "orders" && <OrdersTab orders={orders} escrows={escrows} busy={busy} onAct={patch} />}
@@ -496,7 +502,7 @@ function SaleRow({ sale: s, busy, onAct }: { sale: BazaarSaleDto; busy: string |
             back out
           </button>
           {/* Only offered on big-ticket sales; the component decides. */}
-          <ProposeInstalments saleId={s.id} totalPrice={s.totalPrice} />
+          <ProposeInstalments saleId={s.id} totalPrice={s.totalPrice} isSeller={s.isSeller} />
         </div>
       )}
     </article>

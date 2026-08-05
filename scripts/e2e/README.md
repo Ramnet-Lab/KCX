@@ -8,10 +8,10 @@ npm i playwright && npx playwright install chromium   # once, outside the pnpm w
 node scripts/e2e/clickthrough.mjs                     # needs the dev server on :3000
 ```
 
-Requires a local admin with a password. `scripts/e2e/seed-ui-user.ts` creates one:
+Requires a local admin with a password. `apps/server/src/scripts/seed-ui-user.ts` creates one:
 
 ```sh
-pnpm --filter @kcx/server exec tsx ../../scripts/e2e/seed-ui-user.ts
+pnpm --filter @kcx/server exec tsx src/scripts/seed-ui-user.ts
 ```
 
 ## Why this exists

@@ -28,6 +28,7 @@ export default defineConfig({
   schema: [
     "./src/schema/market.ts",
     "./src/schema/orders.ts",
+    "./src/schema/inventory.ts",
     "./src/schema/auth.ts",
     "./src/schema/contracts.ts",
     "./src/schema/orgs.ts",

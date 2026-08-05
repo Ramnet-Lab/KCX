@@ -6,21 +6,63 @@ DM with no record at all. This puts a schedule around that.
 
 **Read this section before the rest.** It is the reason every guard below exists.
 
-## What this is not
+## Where the line sits
 
-It is not a loan, and KCX is not a party to it.
+Sellers set an interest rate. That is a deliberate change from the original design, which
+charged nothing and used "no interest" as the argument that this was a schedule rather than
+credit. It is no longer that argument, and leaving the old claim in this file would have made
+the documentation lie about the product.
 
-- **No interest, no fees.** A plan's total is taken from the *sale*, never from the caller.
-  Changing *when* money moves is the entire feature; changing *how much* would be interest
-  by another name.
-- **No lender.** Nobody advances anything. The buyer pays the seller directly, in
-  instalments, exactly as they would have paid once.
+What is still true, and what the guards below actually protect:
+
+- **KCX is not a party and lends nothing.** No third party advances anything. The buyer pays
+  the seller directly, on terms the two of them agreed.
 - **aUEC only.** Real-money terms are banned by CIG and by this site.
+- **The principal is the sale price**, taken from the sale and never from the caller. A plan
+  cannot quietly change what the goods cost — only what waiting for the money costs.
+- **The rate is the seller's, advertised before either side agrees**, and fixed at
+  acceptance. Nobody finds out the price of paying over time after committing to it.
+- **Simple interest, charged once on the principal.** Not compounding: a headline rate you
+  cannot check against what you end up paying is not a headline rate.
 
 UEX bans "banking or lending services… or any system that mimics real-world monetary risk"
-on their marketplace, and they are right to be careful. A no-interest payment schedule in
-game currency with no lender is a different object from a loan — but it is close enough that
-the line has to be defended deliberately rather than assumed.
+on their marketplace. An interest-bearing schedule sits closer to that line than the original
+design did. It is in-game currency, between two players, with no lender in the middle — which
+is the argument for it — but this remains the feature most likely to need withdrawing.
+
+## Pricing
+
+The seller names a rate. **Two windows is that rate**; every window beyond two adds **2%**.
+So a seller asking 5% is quoting 5% over two payments, 7% over three, 9% over four, and so
+on. Longer schedules cost more because the seller waits longer for the money and keeps the
+item off the market while they do.
+
+```
+effective = base + 2% × (windows − 2)
+interest  = round(principal × effective)
+total     = principal + interest
+```
+
+Rates are held in **basis points** (500 = 5.00%) so nothing touches a float — money that
+rounds differently depending on which side computed it is money someone will argue about.
+The arithmetic lives in `@kcx/shared/instalments.ts` and is imported by both the proposal
+form and the server, so the figure a buyer agrees to and the figure written into the schedule
+are produced by the same code.
+
+**Only the seller can charge.** A buyer may propose a schedule, but it always carries zero
+interest — a buyer setting their own rate is not a term anyone would honour. The seller is
+free to decline and put up their own.
+
+## What is no longer limited
+
+The **minimum sale price** and the **rate cap** are both gone. What a schedule is worth is
+between the two parties: a seller who wants to offer terms on a small item, or to charge a
+lot for waiting, is making a commercial decision the exchange has no standing to overrule.
+What the exchange still enforces is that the terms are visible before anyone agrees.
+
+The **window count is still bounded at 2–24**, and that bound is mechanical rather than a
+policy: every window is a database row, and a proposal asking for ten thousand payments is a
+denial-of-service dressed as a purchase.
 
 ## The failure mode, and what stops it
 
@@ -46,13 +88,10 @@ buyer:
 | Settled bazaar sales | **5**, at **80%+** completion | Not a credit score — a floor. The first thing someone does here cannot be to owe somebody forty million. |
 | Prior defaults | **0** | Someone who stopped paying once does not get a second schedule. |
 | Concurrent plans | **1** | Nobody runs two at a time and owes several people at once. |
-| Sale size | over **5,000,000 aUEC** | A schedule on a small sale is ceremony with extra risk attached. |
 
 ## The schedule
 
-Between **2 and 12** payments, **1–30 days** apart. One payment isn't an instalment plan,
-and a schedule long enough to outlive the patch it was agreed in is a dispute waiting to
-happen.
+Between **2 and 24** payments, **1–30 days** apart. One payment isn't an instalment plan.
 
 Every row is written up front, so both sides see every date and amount at the moment they
 agree rather than discovering the next one as it arrives. **Rounding goes on the first
@@ -85,11 +124,12 @@ Defined in `packages/db/src/queries/instalments.ts`.
 
 | Constant | Value |
 |---|---|
-| `INSTALMENT_MIN_TOTAL` | 5,000,000 aUEC |
 | `INSTALMENT_MIN_SETTLED` | 5 |
 | `INSTALMENT_MIN_COMPLETION_PCT` | 80 |
 | `INSTALMENT_GRACE_DAYS` | 3 |
 | `MAX_ACTIVE_PLANS` | 1 |
+| `INSTALMENT_RATE_STEP_BPS` | 200 (2% per extra window) |
+| `INSTALMENT_MIN_WINDOWS` / `_MAX_WINDOWS` | 2 / 24 |
 
 ## Known limits
 
@@ -97,8 +137,11 @@ Defined in `packages/db/src/queries/instalments.ts`.
   schedule records what was agreed and whether both parties confirmed each step; it cannot
   make anyone pay.
 - **The seller carries the holding risk.** They keep the item off the market for the length
-  of the plan and get nothing but the record if the buyer defaults. That is the honest trade,
-  and it is why the buyer gates are as strict as they are.
+  of the plan and get nothing but the record if the buyer defaults. The rate is how they are
+  compensated for that, and it is why the buyer gates are as strict as they are.
+- **Nothing caps the rate.** A seller can quote a number nobody should accept. The defence is
+  that it is shown in full, in aUEC and as a percentage, before the buyer agrees — not that
+  the exchange forbids it.
 - **Partial payments are not refunded by the platform.** On a default the buyer has paid for
   something they do not receive. KCX records the amounts on both sides; settling it is
   between the two of them, as with everything else here.

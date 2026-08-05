@@ -1,8 +1,10 @@
 /**
  * End-to-end check of instalment plans.
  *
- * The rules that keep this a payment schedule rather than a scam generator:
- *   - a plan's total is the SALE's total, never the caller's (anything else is interest)
+ * The rules that keep this workable rather than a scam generator:
+ *   - the PRINCIPAL is the sale's price, never the caller's number
+ *   - only the SELLER can charge interest; a buyer-side proposal is always at zero
+ *   - the rate steps up per extra window, and what's stored is what was quoted
  *   - the underlying sale does NOT complete until the final payment clears
  *   - payments settle in order and need both sides
  *   - a default is recorded, the sale is cancelled, and the buyer can't start another
@@ -26,12 +28,12 @@ import {
   expireInstalments,
   gameVersions,
   getDb,
-  INSTALMENT_MIN_TOTAL,
   listInstalmentPlans,
   proposeInstalmentPlan,
   respondToInstalmentPlan,
   users,
 } from "@kcx/db";
+import { INSTALMENT_RATE_STEP_BPS, effectiveRateBps, quoteInstalments } from "@kcx/shared";
 import { eq, sql } from "drizzle-orm";
 
 const db = getDb();
@@ -111,17 +113,63 @@ for (let i = 0; i < 5; i++) await mkSale(1_000_000, "completed");
 const gate = await canUseInstalments(db, buyer.id);
 ok("a buyer with a settlement record can", gate.allowed);
 
-// --- small sales are refused ----------------------------------------------
+// --- there is no floor any more -------------------------------------------
 const small = await mkSale(1_000_000, "pending");
-const tooSmall = await proposeInstalmentPlan(db, { saleId: small.id, userId: buyer.id, instalmentCount: 2, intervalDays: 7 });
-ok(`sales under ${INSTALMENT_MIN_TOTAL.toLocaleString()} are refused`, !tooSmall.ok);
+const smallPlan = await proposeInstalmentPlan(db, {
+  saleId: small.id, userId: buyer.id, instalmentCount: 2, intervalDays: 7,
+});
+ok("there is no minimum sale price any more", smallPlan.ok);
+await db.execute(sql`DELETE FROM instalments WHERE plan_id = ${smallPlan.ok ? smallPlan.planId : null}::uuid`);
+await db.execute(sql`DELETE FROM instalment_plans WHERE sale_id = ${small.id}::uuid`);
+
+// --- the rate belongs to the seller ---------------------------------------
+const rateSale = await mkSale(10_000_000, "pending");
+const buyerRate = await proposeInstalmentPlan(db, {
+  saleId: rateSale.id, userId: buyer.id, instalmentCount: 2, intervalDays: 7, rateBps: 5000,
+});
+ok("a buyer may propose a schedule", buyerRate.ok);
+let rp = (await listInstalmentPlans(db, buyer.id)).find((x) => x.saleId === rateSale.id)!;
+ok("but their proposal carries no interest, even asking 50%", rp.baseRateBps === 0 && rp.interestAmount === 0);
+await db.execute(sql`DELETE FROM instalments WHERE plan_id = ${rp.id}::uuid`);
+await db.execute(sql`DELETE FROM instalment_plans WHERE id = ${rp.id}::uuid`);
+
+const sellerRate = await proposeInstalmentPlan(db, {
+  saleId: rateSale.id, userId: seller.id, instalmentCount: 2, intervalDays: 7, rateBps: 1000,
+});
+ok("the seller can charge one", sellerRate.ok);
+rp = (await listInstalmentPlans(db, buyer.id)).find((x) => x.saleId === rateSale.id)!;
+ok("at two windows it is exactly their rate", rp.baseRateBps === 1000 && rp.effectiveRateBps === 1000);
+ok("interest is simple, on the principal", rp.interestAmount === 1_000_000 && rp.totalAmount === 11_000_000);
+ok("and the principal is untouched", rp.principal === 10_000_000);
+await db.execute(sql`DELETE FROM instalments WHERE plan_id = ${rp.id}::uuid`);
+await db.execute(sql`DELETE FROM instalment_plans WHERE id = ${rp.id}::uuid`);
+
+// --- the per-window step ---------------------------------------------------
+ok("3 windows adds one step", effectiveRateBps(1000, 3) === 1000 + INSTALMENT_RATE_STEP_BPS);
+ok("4 windows adds two", effectiveRateBps(1000, 4) === 1000 + 2 * INSTALMENT_RATE_STEP_BPS);
+const q = quoteInstalments(10_000_000, 1000, 4);
+ok("the quote follows the same rule", q.effectiveRateBps === 1400 && q.total === 11_400_000);
+ok("and its schedule sums to the total", q.schedule.reduce((a, b) => a + b, 0) === q.total);
+
+const stepped = await proposeInstalmentPlan(db, {
+  saleId: rateSale.id, userId: seller.id, instalmentCount: 4, intervalDays: 7, rateBps: 1000,
+});
+ok("a longer schedule is priced by it too", stepped.ok);
+rp = (await listInstalmentPlans(db, buyer.id)).find((x) => x.saleId === rateSale.id)!;
+ok("stored exactly as quoted", rp.effectiveRateBps === 1400 && rp.totalAmount === 11_400_000);
+await db.execute(sql`DELETE FROM instalments WHERE plan_id = ${rp.id}::uuid`);
+await db.execute(sql`DELETE FROM instalment_plans WHERE id = ${rp.id}::uuid`);
 
 // --- propose and accept ----------------------------------------------------
 const big = await mkSale(40_000_000, "pending");
-const bad = await proposeInstalmentPlan(db, { saleId: big.id, userId: buyer.id, instalmentCount: 20, intervalDays: 7 });
-ok("more than 12 payments is refused", !bad.ok);
+const bad = await proposeInstalmentPlan(db, {
+  saleId: big.id, userId: buyer.id, instalmentCount: 99, intervalDays: 7,
+});
+ok("beyond the window ceiling is refused", !bad.ok);
 
-const proposed = await proposeInstalmentPlan(db, { saleId: big.id, userId: buyer.id, instalmentCount: 4, intervalDays: 7 });
+const proposed = await proposeInstalmentPlan(db, {
+  saleId: big.id, userId: buyer.id, instalmentCount: 4, intervalDays: 7,
+});
 ok("a valid schedule is proposed", proposed.ok);
 
 const selfAccept = await respondToInstalmentPlan(db, { planId: proposed.ok ? proposed.planId! : "", userId: buyer.id, action: "accept" });
@@ -132,8 +180,8 @@ ok("the other side accepts it", accepted.ok);
 
 let plans = await listInstalmentPlans(db, buyer.id);
 let plan = plans.find((p) => p.id === (proposed.ok ? proposed.planId : ""))!;
-ok("the total equals the sale, not the caller's number", plan.totalAmount === 40_000_000);
-ok("the schedule sums to the total", plan.instalments.reduce((s, i) => s + i.amount, 0) === 40_000_000);
+ok("the principal equals the sale, not the caller's number", plan.principal === 40_000_000);
+ok("the schedule sums to the total", plan.instalments.reduce((s, i) => s + i.amount, 0) === plan.totalAmount);
 ok("rounding lands on the FIRST payment", plan.instalments[0]!.amount >= plan.instalments[3]!.amount);
 
 // --- payments settle in order, both sides ----------------------------------
@@ -162,7 +210,7 @@ for (const i of plan.instalments.filter((x) => x.status !== "paid")) {
 const [saleDone] = await db.select().from(bazaarSales).where(eq(bazaarSales.id, big.id));
 ok("the sale completes only on the final payment", saleDone!.status === "completed");
 balances = await db.select().from(users).where(eq(users.id, buyer.id));
-ok("the buyer paid exactly the sale price, no more", balances[0]!.auecBalance === 60_000_000);
+ok("the buyer paid exactly the agreed total, no more", balances[0]!.auecBalance === 100_000_000 - plan.totalAmount);
 
 // --- default --------------------------------------------------------------
 const big2 = await mkSale(20_000_000, "pending");

@@ -14,6 +14,7 @@ import {
 import { orgs } from "../schema/orgs";
 import { users } from "../schema/orders";
 import { committedAuecSql } from "./collateral";
+import { consumeInventory } from "./inventory";
 
 /**
  * Bazaar mechanics: listing the board, bidding, buying, and settling.
@@ -805,6 +806,21 @@ export async function resolveBazaarSale(
       type: "sale_completed",
       data: { total: sale.totalPrice },
     });
+
+    // The goods have now actually changed hands, so take them out of the seller's declared
+    // stock. Here rather than when the sale was agreed: until both sides confirmed, the units
+    // were promised but still held, which `committed` already accounts for. Doing it at
+    // agreement would double-count — once as committed, once as gone.
+    const [listing] = await tx
+      .select({ itemId: bazaarListings.itemId })
+      .from(bazaarListings)
+      .where(eq(bazaarListings.id, sale.listingId));
+    await consumeInventory(tx, {
+      userId: sale.sellerId,
+      itemId: listing?.itemId ?? null,
+      quantity: sale.quantity,
+    });
+
     return { ok: true as const, saleId: sale.id };
   });
 }

@@ -3,6 +3,12 @@ import type { Db } from "../client";
 import { bazaarSales } from "../schema/bazaar";
 import { instalmentDefaults, instalmentPlans, instalments } from "../schema/instalments";
 import { users } from "../schema/orders";
+import {
+  INSTALMENT_MAX_RATE_BPS,
+  INSTALMENT_MAX_WINDOWS,
+  INSTALMENT_MIN_WINDOWS,
+  quoteInstalments,
+} from "@kcx/shared";
 import { bazaarStandingFor } from "./bazaar";
 
 /**
@@ -14,8 +20,17 @@ import { bazaarStandingFor } from "./bazaar";
  * attack is a fresh account with nothing to lose.
  */
 
-/** Below this, pay in one go. A schedule on a small sale is ceremony with extra risk. */
-export const INSTALMENT_MIN_TOTAL = 5_000_000;
+/**
+ * There is no minimum sale price and no cap on the rate.
+ *
+ * Both were removed deliberately: what a schedule is worth is between the two parties, and a
+ * seller who wants to offer terms on a small item — or to charge a lot for waiting — is
+ * making a commercial decision, not one the exchange has any standing to overrule. What the
+ * exchange still enforces is that the terms are visible before anyone agrees to them.
+ *
+ * The window range in @kcx/shared is the one remaining bound, and it is mechanical rather
+ * than a policy: every window is a row.
+ */
 
 /** The buyer must be RSI-verified and have a real settlement record behind them. */
 export const INSTALMENT_MIN_SETTLED = 5;
@@ -46,6 +61,12 @@ export type InstalmentPlanDto = {
   buyerName: string;
   sellerId: string;
   sellerName: string;
+  /** The sale price, before the charge for paying over time. */
+  principal: number;
+  /** The seller's advertised rate, and what the chosen window count actually costs. */
+  baseRateBps: number;
+  effectiveRateBps: number;
+  interestAmount: number;
   totalAmount: number;
   instalmentCount: number;
   intervalDays: number;
@@ -124,18 +145,34 @@ export async function canUseInstalments(
 /**
  * Propose a schedule against a pending sale.
  *
- * The total is taken from the SALE, never from the caller: an instalment plan changes when
- * the money moves, never how much. A "total" that could differ from the sale price is
- * interest by another name, and that is the line this feature must not cross.
+ * The PRINCIPAL is taken from the sale, never from the caller — a plan cannot quietly change
+ * what the goods cost. What it can add is the seller's advertised charge for waiting, priced
+ * by @kcx/shared so the figure on the proposal screen and the figure in the schedule are
+ * computed by the same code.
+ *
+ * Only the seller may set a rate. A buyer proposing their own interest is not a term anyone
+ * would honour, so a buyer-side proposal is always at zero and the seller is free to decline
+ * and put up their own.
  */
 export async function proposeInstalmentPlan(
   db: Db,
-  opts: { saleId: string; userId: string; instalmentCount: number; intervalDays: number },
+  opts: {
+    saleId: string;
+    userId: string;
+    instalmentCount: number;
+    intervalDays: number;
+    /** Basis points; 500 = 5.00%. Ignored unless the proposer is the seller. */
+    rateBps?: number;
+  },
 ): Promise<InstalmentResult> {
   const count = Math.floor(opts.instalmentCount);
   const interval = Math.floor(opts.intervalDays);
-  if (count < 2 || count > 12) return { ok: false, error: "Between 2 and 12 payments." };
+  if (count < INSTALMENT_MIN_WINDOWS || count > INSTALMENT_MAX_WINDOWS) {
+    return { ok: false, error: `Between ${INSTALMENT_MIN_WINDOWS} and ${INSTALMENT_MAX_WINDOWS} payments.` };
+  }
   if (interval < 1 || interval > 30) return { ok: false, error: "Payments must be 1–30 days apart." };
+  const requestedRate = Math.max(0, Math.floor(opts.rateBps ?? 0));
+  if (requestedRate > INSTALMENT_MAX_RATE_BPS) return { ok: false, error: "That rate isn't a real number." };
 
   return db.transaction(async (tx) => {
     const [sale] = await tx.select().from(bazaarSales).where(eq(bazaarSales.id, opts.saleId)).for("update");
@@ -144,13 +181,6 @@ export async function proposeInstalmentPlan(
     if (sale.buyerId !== opts.userId && sale.sellerId !== opts.userId) {
       return { ok: false as const, error: "You're not party to that sale" };
     }
-    if (sale.totalPrice < INSTALMENT_MIN_TOTAL) {
-      return {
-        ok: false as const,
-        error: `Instalments are for sales over ${INSTALMENT_MIN_TOTAL.toLocaleString()} aUEC. Pay this one in full.`,
-      };
-    }
-
     const [existing] = await tx.select().from(instalmentPlans).where(eq(instalmentPlans.saleId, sale.id));
     if (existing) return { ok: false as const, error: "This sale already has a plan" };
 
@@ -163,6 +193,10 @@ export async function proposeInstalmentPlan(
       };
     }
 
+    // Only the seller's rate counts. A buyer-side proposal carries none.
+    const baseRate = sale.sellerId === opts.userId ? requestedRate : 0;
+    const quote = quoteInstalments(sale.totalPrice, baseRate, count);
+
     const [plan] = await tx
       .insert(instalmentPlans)
       .values({
@@ -170,24 +204,26 @@ export async function proposeInstalmentPlan(
         buyerId: sale.buyerId,
         sellerId: sale.sellerId,
         proposedById: opts.userId,
-        totalAmount: sale.totalPrice,
+        principal: quote.principal,
+        baseRateBps: quote.baseRateBps,
+        effectiveRateBps: quote.effectiveRateBps,
+        interestAmount: quote.interest,
+        totalAmount: quote.total,
         instalmentCount: count,
         intervalDays: interval,
       })
       .returning();
 
     // The whole schedule is written up front so both sides see every date and amount at the
-    // moment they agree, rather than discovering the next one as it arrives. Rounding goes
-    // on the FIRST payment, not the last: a buyer should not find the final instalment is
-    // the awkward one after they have already paid everything else.
-    const base = Math.floor(sale.totalPrice / count);
-    const remainder = sale.totalPrice - base * count;
+    // moment they agree, rather than discovering the next one as it arrives. The rounding
+    // sits on the FIRST payment — a buyer should not find the final instalment is the
+    // awkward one after they have already paid everything else.
     const now = Date.now();
     await tx.insert(instalments).values(
-      Array.from({ length: count }, (_, i) => ({
+      quote.schedule.map((amount, i) => ({
         planId: plan!.id,
         sequence: i + 1,
-        amount: i === 0 ? base + remainder : base,
+        amount,
         dueAt: new Date(now + i * interval * 86_400_000),
       })),
     );
@@ -416,12 +452,14 @@ export async function listInstalmentPlans(db: Db, userId: string): Promise<Insta
   const rows = await db.execute<{
     id: string; sale_id: string; listing_title: string;
     buyer_id: string; buyer_name: string; seller_id: string; seller_name: string;
+    principal: string; base_rate_bps: number; effective_rate_bps: number; interest_amount: string;
     total_amount: string; instalment_count: number; interval_days: number;
     status: string; proposed_by_id: string; created_at: string | Date;
   }>(sql`
     SELECT p.id::text, p.sale_id::text, l.title AS listing_title,
            p.buyer_id::text, b.display_name AS buyer_name,
            p.seller_id::text, s.display_name AS seller_name,
+           p.principal::text, p.base_rate_bps, p.effective_rate_bps, p.interest_amount::text,
            p.total_amount::text, p.instalment_count, p.interval_days,
            p.status, p.proposed_by_id::text, p.created_at
     FROM instalment_plans p
@@ -451,6 +489,10 @@ export async function listInstalmentPlans(db: Db, userId: string): Promise<Insta
       buyerName: r.buyer_name,
       sellerId: r.seller_id,
       sellerName: r.seller_name,
+      principal: Number(r.principal),
+      baseRateBps: r.base_rate_bps,
+      effectiveRateBps: r.effective_rate_bps,
+      interestAmount: Number(r.interest_amount),
       totalAmount: Number(r.total_amount),
       instalmentCount: r.instalment_count,
       intervalDays: r.interval_days,

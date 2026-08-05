@@ -3,7 +3,7 @@
 import type { BazaarListingDto } from "@kcx/db";
 import { BAZAAR_CATEGORIES, BAZAAR_CATEGORY_LABELS, type BazaarCategory } from "@kcx/shared";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { BazaarCompose } from "@/components/bazaar-compose";
 import { BazaarStandingBadge } from "@/components/trader-standing";
@@ -42,6 +42,30 @@ export function BazaarBoard({
   const [mineOnly, setMineOnly] = useState(false);
   const [includeEnded, setIncludeEnded] = useState(false);
   const [composing, setComposing] = useState(false);
+
+  /*
+   * Handoff from the inventory tab: /bazaar?list=<itemId>&qty=<n>&name=<label>.
+   *
+   * Read once into state rather than kept as a live derivation — the seed is a starting
+   * point for a form the seller then edits, and re-applying it on every render would fight
+   * whatever they typed. Cleared from the URL for the same reason a refresh should not
+   * silently re-seed a half-filled form.
+   */
+  const params = useSearchParams();
+  const [seed, setSeed] = useState<{ itemId: number; name: string; quantity: number } | null>(null);
+  useEffect(() => {
+    const raw = params.get("list");
+    if (!raw) return;
+    const itemId = Number(raw);
+    if (!Number.isInteger(itemId) || itemId <= 0) return;
+    setSeed({
+      itemId,
+      name: params.get("name") ?? "",
+      quantity: Math.max(1, Number(params.get("qty")) || 1),
+    });
+    setComposing(true);
+    window.history.replaceState(null, "", "/bazaar");
+  }, [params]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
@@ -166,6 +190,7 @@ export function BazaarBoard({
       )}
       {composing && signedIn && (
         <BazaarCompose
+          seed={seed}
           onPosted={(id) => {
             setComposing(false);
             router.push(`/bazaar/${id}`);

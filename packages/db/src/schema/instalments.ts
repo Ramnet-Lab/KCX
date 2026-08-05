@@ -25,18 +25,28 @@ import { users } from "./orders";
  * record instead of into a screenshot.
  *
  * ------------------------------------------------------------------------------------
- * WHAT THIS IS NOT
+ * WHERE THE LINE NOW SITS
  *
- * It is not a loan, and KCX is not a party to it. No interest, no fees, no third-party
- * lending, and aUEC only — real-money terms are banned outright by CIG and by this site.
- * The exchange holds nothing and lends nothing; it records a payment schedule two players
- * agreed and tracks whether they kept to it.
+ * Sellers set an interest rate. That is a deliberate change from the original design, which
+ * charged nothing and leaned on "no interest" as the argument that this was a schedule
+ * rather than credit. It no longer is that argument, and pretending otherwise in a comment
+ * would be worse than the change itself.
  *
- * That distinction is deliberate and load-bearing. UEX bans "banking or lending services...
- * or any system that mimics real-world monetary risk" on their marketplace, and they are
- * right to be careful. A payment schedule denominated in game currency, with no interest and
- * no lender, is a different object from a loan — but it is close enough that every guard
- * below exists to keep it on the right side of that line.
+ * What remains true, and is what the guards below actually protect:
+ *
+ *  • **KCX is not a party and lends nothing.** No third party advances money; the buyer pays
+ *    the seller directly, on a schedule the two of them agreed.
+ *  • **aUEC only.** Real-money terms are banned outright by CIG and by this site.
+ *  • **The rate is the seller's, advertised before either side agrees**, and fixed at
+ *    acceptance. Nobody discovers the price of waiting after they have committed.
+ *  • **Simple interest on the principal, once.** Not compounding — a headline rate you
+ *    cannot check against what you end up paying is not a headline rate.
+ *
+ * Worth stating plainly: UEX bans "banking or lending services... or any system that mimics
+ * real-world monetary risk" on their marketplace. An interest-bearing schedule is closer to
+ * that line than the original design was. It is in-game currency between two players with no
+ * lender in the middle, which is why it is defensible — but this is the feature most likely
+ * to need withdrawing if it produces disputes faster than it produces trades.
  *
  * ------------------------------------------------------------------------------------
  * WHY THE GUARDS ARE WHERE THEY ARE
@@ -83,10 +93,24 @@ export const instalmentPlans = pgTable(
       .notNull()
       .references(() => users.id),
 
+    /** The sale price. What the goods cost before any charge for paying over time. */
+    principal: bigint("principal", { mode: "number" }).notNull(),
     /**
-     * Total payable. Must equal the sale's total: an instalment plan changes WHEN the money
-     * moves, never how much. Anything else is interest by another name.
+     * The rate the SELLER demanded, in basis points (500 = 5.00%).
+     *
+     * Advertised on the proposal before either side agrees, and only the seller can set it —
+     * a buyer proposing their own interest rate is not a thing anyone would honour.
      */
+    baseRateBps: integer("base_rate_bps").notNull().default(0),
+    /**
+     * What was actually charged: the seller's rate plus the per-window step.
+     *
+     * Stored rather than recomputed because it is a term of the agreement. Changing the step
+     * later must not retroactively alter what somebody already signed up to.
+     */
+    effectiveRateBps: integer("effective_rate_bps").notNull().default(0),
+    interestAmount: bigint("interest_amount", { mode: "number" }).notNull().default(0),
+    /** principal + interest. What the buyer actually pays across the schedule. */
     totalAmount: bigint("total_amount", { mode: "number" }).notNull(),
     instalmentCount: smallint("instalment_count").notNull(),
     /** Days between instalments, so the schedule is reconstructible. */
@@ -107,10 +131,16 @@ export const instalmentPlans = pgTable(
     index("instalment_plans_seller").on(t.sellerId, t.status),
     check("instalment_plans_total_positive", sql`${t.totalAmount} > 0`),
     /**
-     * Between 2 and 12 payments. One isn't an instalment plan, and a schedule long enough to
-     * outlive the patch it was agreed in is a dispute waiting to happen.
+     * Between 2 and 24 windows. Not a view on how much credit is sensible — the seller
+     * decides that by pricing it. The ceiling is mechanical: every window is a row, and a
+     * proposal asking for ten thousand payments is a denial-of-service dressed as a purchase.
      */
-    check("instalment_plans_count_range", sql`${t.instalmentCount} BETWEEN 2 AND 12`),
+    check("instalment_plans_count_range", sql`${t.instalmentCount} BETWEEN 2 AND 24`),
+    check("instalment_plans_principal_positive", sql`${t.principal} > 0`),
+    check("instalment_plans_rates_non_negative", sql`${t.baseRateBps} >= 0 AND ${t.effectiveRateBps} >= 0`),
+    check("instalment_plans_interest_non_negative", sql`${t.interestAmount} >= 0`),
+    /** The total has to be the two parts it is made of, or the schedule means nothing. */
+    check("instalment_plans_total_is_sum", sql`${t.totalAmount} = ${t.principal} + ${t.interestAmount}`),
     check("instalment_plans_interval_range", sql`${t.intervalDays} BETWEEN 1 AND 30`),
     check("instalment_plans_distinct_parties", sql`${t.buyerId} <> ${t.sellerId}`),
   ],

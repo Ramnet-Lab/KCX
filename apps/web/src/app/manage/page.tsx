@@ -5,6 +5,8 @@ import {
   listBazaarThreads,
   listInstalmentPlans,
   listPriceAlerts,
+  listInventory,
+  type InventoryRow,
   listWatchlist,
   type InstalmentPlanDto,
   type BazaarThreadDto,
@@ -53,11 +55,20 @@ export default async function ManagePage() {
   let plans: InstalmentPlanDto[] = [];
   let eligibility: { allowed: boolean; reason: string | null } | null = null;
   let toRate: { saleId: string; counterpartyName: string; title: string }[] = [];
+  let inventory: InventoryRow[] = [];
 
+  /*
+   * allSettled, not all.
+   *
+   * These are eleven independent reads, and Promise.all made them one failure domain: a
+   * stale column in the instalments query blanked the ENTIRE desk — listings, sales,
+   * contracts, orders, everything — behind a single catch. A trader saw an empty page and
+   * no error, which is indistinguishable from having nothing on. Each section now fails on
+   * its own and the rest still render.
+   */
   try {
     const db = getDb();
-    [listings, sales, serviceContracts, orders, escrows, threads, watchlist, alerts, plans, eligibility, toRate] =
-      await Promise.all([
+    const settled = await Promise.allSettled([
       myBazaarListings(db, user.id),
       listBazaarSales(db, user.id),
       listContractsBoard(db, {
@@ -79,7 +90,27 @@ export default async function ManagePage() {
       listInstalmentPlans(db, user.id),
       canUseInstalments(db, user.id),
       pendingBazaarRatings(db, user.id),
+      listInventory(db, user.id),
     ]);
+    settled.forEach((r, i) => {
+      if (r.status === "rejected") {
+        console.error(`[manage page] section ${i} failed:`, r.reason instanceof Error ? r.reason.message : r.reason);
+      }
+    });
+    const val = <T,>(i: number, fallback: T): T =>
+      settled[i]?.status === "fulfilled" ? ((settled[i] as PromiseFulfilledResult<T>).value ?? fallback) : fallback;
+    listings = val(0, listings);
+    sales = val(1, sales);
+    serviceContracts = val(2, serviceContracts);
+    orders = val(3, orders);
+    escrows = val(4, escrows);
+    threads = val(5, threads);
+    watchlist = val(6, watchlist);
+    alerts = val(7, alerts);
+    plans = val(8, plans);
+    eligibility = val(9, eligibility);
+    toRate = val(10, toRate);
+    inventory = val(11, inventory);
   } catch (err) {
     console.error("[manage page]", err instanceof Error ? err.message : err);
   }
@@ -107,6 +138,7 @@ export default async function ManagePage() {
         plans={plans}
         instalmentEligibility={eligibility}
         pendingRatings={toRate}
+        inventory={inventory}
       />
     </>
   );

@@ -1,5 +1,5 @@
 {
-  "id": "08d8db58-264d-4edb-a791-df6bed859e55",
+  "id": "90885116-3291-4950-9445-065a5cca5ef5",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -2444,6 +2444,98 @@
       },
       "policies": {},
       "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.user_inventory": {
+      "name": "user_inventory",
+      "schema": "",
+      "columns": {
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "item_id": {
+          "name": "item_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "quantity": {
+          "name": "quantity",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "note": {
+          "name": "note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "user_inventory_user_id_users_id_fk": {
+          "name": "user_inventory_user_id_users_id_fk",
+          "tableFrom": "user_inventory",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "user_inventory_item_id_bazaar_items_id_fk": {
+          "name": "user_inventory_item_id_bazaar_items_id_fk",
+          "tableFrom": "user_inventory",
+          "tableTo": "bazaar_items",
+          "columnsFrom": [
+            "item_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "user_inventory_user_id_item_id_pk": {
+          "name": "user_inventory_user_id_item_id_pk",
+          "columns": [
+            "user_id",
+            "item_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "user_inventory_quantity_non_negative": {
+          "name": "user_inventory_quantity_non_negative",
+          "value": "\"user_inventory\".\"quantity\" >= 0"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.auth_events": {
@@ -7312,6 +7404,33 @@
           "primaryKey": false,
           "notNull": true
         },
+        "principal": {
+          "name": "principal",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "base_rate_bps": {
+          "name": "base_rate_bps",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "effective_rate_bps": {
+          "name": "effective_rate_bps",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "interest_amount": {
+          "name": "interest_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
         "total_amount": {
           "name": "total_amount",
           "type": "bigint",
@@ -7512,7 +7631,23 @@
         },
         "instalment_plans_count_range": {
           "name": "instalment_plans_count_range",
-          "value": "\"instalment_plans\".\"instalment_count\" BETWEEN 2 AND 12"
+          "value": "\"instalment_plans\".\"instalment_count\" BETWEEN 2 AND 24"
+        },
+        "instalment_plans_principal_positive": {
+          "name": "instalment_plans_principal_positive",
+          "value": "\"instalment_plans\".\"principal\" > 0"
+        },
+        "instalment_plans_rates_non_negative": {
+          "name": "instalment_plans_rates_non_negative",
+          "value": "\"instalment_plans\".\"base_rate_bps\" >= 0 AND \"instalment_plans\".\"effective_rate_bps\" >= 0"
+        },
+        "instalment_plans_interest_non_negative": {
+          "name": "instalment_plans_interest_non_negative",
+          "value": "\"instalment_plans\".\"interest_amount\" >= 0"
+        },
+        "instalment_plans_total_is_sum": {
+          "name": "instalment_plans_total_is_sum",
+          "value": "\"instalment_plans\".\"total_amount\" = \"instalment_plans\".\"principal\" + \"instalment_plans\".\"interest_amount\""
         },
         "instalment_plans_interval_range": {
           "name": "instalment_plans_interval_range",

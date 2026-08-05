@@ -33,18 +33,25 @@ const MODES: { value: BazaarListingType; label: string; blurb: string }[] = [
  * image doesn't discard a filled-in form — the item is listed either way and the seller is
  * told which photo didn't make it.
  */
-export function BazaarCompose({ onPosted }: { onPosted: (id: string) => void }) {
+export function BazaarCompose({
+  onPosted,
+  seed,
+}: {
+  onPosted: (id: string) => void;
+  /** Prefill handed over from the inventory tab — item and how many are free to sell. */
+  seed?: { itemId: number; name: string; quantity: number } | null;
+}) {
   const [intent, setIntent] = useState<BazaarIntent>("sell");
   const [orgId, setOrgId] = useState<string>("");
   const [orgs, setOrgs] = useState<{ id: string; sid: string; name: string; myRole: string | null }[]>([]);
-  const [item, setItem] = useState<PickedItem | null>(null);
-  const [title, setTitle] = useState("");
+  const [item, setItem] = useState<PickedItem | null>(seed ? { id: seed.itemId, name: seed.name } : null);
+  const [title, setTitle] = useState(seed?.name ?? "");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState<BazaarCategory>("ships");
   const [listingType, setListingType] = useState<BazaarListingType>("buy_now");
   const [buyNowPrice, setBuyNowPrice] = useState("");
   const [startPrice, setStartPrice] = useState("");
-  const [quantity, setQuantity] = useState("1");
+  const [quantity, setQuantity] = useState(seed ? String(seed.quantity) : "1");
   const [hours, setHours] = useState<number>(BAZAAR_DEFAULT_HOURS);
   const [images, setImages] = useState<{ file: File; url: string }[]>([]);
   const [busy, setBusy] = useState(false);

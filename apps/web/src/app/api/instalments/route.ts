@@ -6,6 +6,11 @@ import {
   proposeInstalmentPlan,
   respondToInstalmentPlan,
 } from "@kcx/db";
+import {
+  INSTALMENT_MAX_RATE_BPS,
+  INSTALMENT_MAX_WINDOWS,
+  INSTALMENT_MIN_WINDOWS,
+} from "@kcx/shared";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { currentUser } from "@/lib/session";
@@ -33,8 +38,10 @@ const input = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("propose"),
     saleId: z.uuid(),
-    instalmentCount: z.number().int().min(2).max(12),
+    instalmentCount: z.number().int().min(INSTALMENT_MIN_WINDOWS).max(INSTALMENT_MAX_WINDOWS),
     intervalDays: z.number().int().min(1).max(30),
+    /** Basis points. Honoured only when the proposer is the seller — see the query. */
+    rateBps: z.number().int().min(0).max(INSTALMENT_MAX_RATE_BPS).optional(),
   }),
   z.object({ action: z.literal("accept"), planId: z.uuid() }),
   z.object({ action: z.literal("decline"), planId: z.uuid() }),
@@ -44,9 +51,9 @@ const input = z.discriminatedUnion("action", [
 /**
  * POST — propose a schedule, answer one, or confirm a payment.
  *
- * Nothing here lends anything. A plan changes WHEN the money moves, never how much: the
- * total comes from the sale, there is no interest, and KCX is not a party. The goods do not
- * change hands until the schedule completes.
+ * KCX lends nothing and is not a party. The PRINCIPAL comes from the sale — a plan cannot
+ * change what the goods cost — and the seller's advertised rate is what they charge for
+ * waiting. The goods do not change hands until the schedule completes.
  */
 export async function POST(request: Request) {
   const user = await currentUser();
@@ -70,6 +77,7 @@ export async function POST(request: Request) {
             userId: user.id,
             instalmentCount: body.instalmentCount,
             intervalDays: body.intervalDays,
+            rateBps: body.rateBps,
           })
         : body.action === "confirm"
           ? await confirmInstalment(db, { instalmentId: body.instalmentId, userId: user.id })

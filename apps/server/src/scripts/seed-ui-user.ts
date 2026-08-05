@@ -1,4 +1,4 @@
-import { loadRootEnv } from "../../apps/server/src/env";
+import { loadRootEnv } from "../env";
 loadRootEnv();
 
 import { getDb, users } from "@kcx/db";
