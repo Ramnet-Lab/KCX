@@ -229,7 +229,6 @@ export function SignInFlow() {
               autoComplete="username"
               value={handle}
               onChange={(e) => setHandle(e.target.value)}
-              placeholder="e.g. ramnet"
               className="mt-1 w-full rounded border border-line bg-bg px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-ink-faint focus:outline-none"
             />
           </label>
@@ -283,7 +282,6 @@ export function SignInFlow() {
               value={handle}
               onChange={(e) => setHandle(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && requestCode()}
-              placeholder="e.g. ramnet"
               className="mt-1 w-full rounded border border-line bg-bg px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-ink-faint focus:outline-none"
             />
             <span className="mt-1 block text-[11px] text-ink-faint">
