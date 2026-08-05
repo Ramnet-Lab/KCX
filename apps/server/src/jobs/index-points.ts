@@ -80,7 +80,19 @@ export async function rebuildIndexSince(since: Date): Promise<void> {
       SELECT 'KCXC', captured_at, avg(v / prev_v), count(*)::int
       FROM moves GROUP BY captured_at
     ),
-    sectors AS (SELECT DISTINCT sector FROM returns),
+    -- Sectors come from the GRID, not from the returns CTE.
+    --
+    -- A return needs two ticks to exist, so on a database with a single capture that CTE is
+    -- empty — and deriving the sector list from it made the seeds empty, which made the base
+    -- row empty, so the rebuild wrote nothing at all and the index chart stayed blank until
+    -- the second poll half an hour later. Found on a freshly rebuilt production database,
+    -- where "wait 30 minutes for the site to show an index" is not an acceptable first
+    -- impression. The grid has rows from the very first capture.
+    sectors AS (
+      SELECT DISTINCT sector FROM grid WHERE v IS NOT NULL
+      UNION
+      SELECT 'KCXC'
+    ),
     -- The stored series runs CONTINUOUSLY across patches and is never rebased. Rebasing it at
     -- each season would discard the long-run history, and whether commodities inflate patch
     -- over patch is exactly the question no other Star Citizen tool can answer. The

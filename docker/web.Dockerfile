@@ -44,6 +44,15 @@ COPY --from=build --chown=kcx:kcx /app/apps/web/.next/static ./apps/web/.next/st
 # nothing instead of failing the build. Next only creates public/ when assets exist.
 COPY --from=build --chown=kcx:kcx /app/apps/web/publi[c] ./apps/web/public
 
+# The upload target must exist in the IMAGE, owned by the runtime user, before anything
+# mounts over it. Docker seeds a new named volume from whatever is at the mount path —
+# including ownership — but only if that path exists. Without this the volume was created
+# root:root 755 while the app runs as kcx, so every single upload failed with EACCES:
+# contract images and org logos alike. The org logo path swallows the error to keep a missing
+# badge from failing a page, so the symptom was a blank square rather than an error anyone
+# would see, and it stayed invisible until someone asked why a logo wasn't showing.
+RUN mkdir -p /app/uploads && chown kcx:kcx /app/uploads
+
 USER kcx
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
