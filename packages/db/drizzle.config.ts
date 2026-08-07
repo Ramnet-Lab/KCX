@@ -37,6 +37,7 @@ export default defineConfig({
     "./src/schema/instalments.ts",
     "./src/schema/watchlist.ts",
     "./src/schema/moderation.ts",
+    "./src/schema/feedback.ts",
   ],
   out: "./migrations",
   dbCredentials: { url },

@@ -9,7 +9,7 @@ import { users } from "./orders";
  * — including the ones that turn out to be wrong.
  */
 
-export const MODERATION_TARGETS = ["user", "contract", "breach", "order"] as const;
+export const MODERATION_TARGETS = ["user", "contract", "breach", "order", "feature_request"] as const;
 
 export const MODERATION_ACTIONS = [
   "breach_upheld",
@@ -19,6 +19,10 @@ export const MODERATION_ACTIONS = [
   "user_unbanned",
   "role_granted",
   "role_revoked",
+  /** A reply was delivered to whoever asked for the feature. */
+  "feedback_answered",
+  /** The request was moved between statuses without writing to the author. */
+  "feedback_triaged",
   "note",
 ] as const;
 

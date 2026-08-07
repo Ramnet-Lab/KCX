@@ -16,6 +16,7 @@
     "check:orgs": "pnpm --filter @kcx/server check:orgs",
     "check:makers": "pnpm --filter @kcx/server check:makers",
     "check:instalments": "pnpm --filter @kcx/server check:instalments",
+    "check:feedback": "pnpm --filter @kcx/server check:feedback",
     "seed:demo": "pnpm --filter @kcx/server exec tsx src/scripts/seed-demo-book.ts",
     "db:start": "node scripts/db.mjs start",
     "db:stop": "node scripts/db.mjs stop",

@@ -1,5 +1,6 @@
 export * from "./bazaar";
 export * from "./constants";
+export * from "./feedback";
 export * from "./instalments";
 export * from "./item-key";
 export * from "./orders";

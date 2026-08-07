@@ -1,4 +1,4 @@
-import { getDb, passkeys } from "@kcx/db";
+import { getDb, listInbox, passkeys, type InboxMessageDto } from "@kcx/db";
 import { eq } from "drizzle-orm";
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { AccountActions } from "@/components/account-actions";
 import { AccountPasskeys } from "@/components/account-passkeys";
 import { AccountPassword } from "@/components/account-password";
+import { InboxPanel } from "@/components/inbox-panel";
 import { MIN_PASSWORD_LENGTH } from "@/lib/password";
 import { currentUser } from "@/lib/session";
 
@@ -20,7 +21,8 @@ export default async function AccountPage() {
   const user = await currentUser();
   if (!user) redirect("/signin");
 
-  const devices = await getDb()
+  const db = getDb();
+  const devices = await db
     .select({
       id: passkeys.id,
       deviceName: passkeys.deviceName,
@@ -29,6 +31,14 @@ export default async function AccountPage() {
     })
     .from(passkeys)
     .where(eq(passkeys.userId, user.id));
+
+  // An empty inbox is not a reason to fail the whole account page.
+  let messages: InboxMessageDto[] = [];
+  try {
+    messages = await listInbox(db, user.id);
+  } catch (err) {
+    console.error("[account:inbox]", err instanceof Error ? err.message : err);
+  }
 
   // Account age is the cheapest honest anti-alt signal we have.
   const enlistedYears = user.enlistedAt
@@ -44,6 +54,9 @@ export default async function AccountPage() {
         <h1 className="text-lg font-bold text-ink">Account</h1>
         <AccountActions className="ml-auto" />
       </div>
+
+      {/* First on the page: it is what the badge on your name in the header points at. */}
+      <InboxPanel initial={messages} />
 
       {!proven && (
         <div className="mb-4 rounded border border-accent/50 bg-accent/10 p-4 text-sm">

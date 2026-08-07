@@ -47,11 +47,16 @@ export type ModOverview = {
   classifiedLive: number;
   bannedUsers: number;
   totalUsers: number;
+  /** Ideas from the suggestion box that nobody has replied to yet. */
+  unansweredFeedback: number;
 };
 
 export async function moderationOverview(db: Db): Promise<ModOverview> {
   const res = await db.execute<Record<string, string>>(sql`
     SELECT
+      (SELECT count(*) FROM feature_requests
+         WHERE responded_at IS NULL
+           AND status IN ('new','reviewing','planned'))::text                   AS unanswered_feedback,
       (SELECT count(*) FROM contract_breaches WHERE status = 'reported')::text  AS open_breaches,
       (SELECT count(*) FROM contract_breaches WHERE status = 'disputed')::text  AS disputed_breaches,
       (SELECT count(*) FROM service_contracts
@@ -71,6 +76,7 @@ export async function moderationOverview(db: Db): Promise<ModOverview> {
     classifiedLive: Number(r.classified_live ?? 0),
     bannedUsers: Number(r.banned_users ?? 0),
     totalUsers: Number(r.total_users ?? 0),
+    unansweredFeedback: Number(r.unanswered_feedback ?? 0),
   };
 }
 

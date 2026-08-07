@@ -51,30 +51,91 @@ export function DeskNavLink() {
   );
 }
 
-let cached: Promise<{ user: SessionUser | null; devLoginEnabled: boolean }> | null = null;
-function fetchSession() {
+type SessionState = { user: SessionUser | null; devLoginEnabled: boolean; unreadMessages: number };
+
+const SIGNED_OUT: SessionState = { user: null, devLoginEnabled: false, unreadMessages: 0 };
+
+let cached: Promise<SessionState> | null = null;
+/**
+ * Mounted consumers, so a refresh reaches the header from anywhere.
+ *
+ * The unread badge lives in this bar but is cleared by the inbox on /account — a component
+ * that has no way to reach up here. Without the broadcast the badge keeps claiming unread
+ * mail until a full page load, which reads as the site being wrong rather than stale.
+ */
+const listeners = new Set<(s: SessionState) => void>();
+
+function fetchSession(): Promise<SessionState> {
   cached ??= fetch("/api/auth/session")
     .then((r) => r.json())
-    .catch(() => ({ user: null, devLoginEnabled: false }));
+    .then((s) => ({
+      user: (s?.user ?? null) as SessionUser | null,
+      devLoginEnabled: !!s?.devLoginEnabled,
+      unreadMessages: Number(s?.unreadMessages ?? 0),
+    }))
+    .catch(() => SIGNED_OUT);
   return cached;
 }
 
+/** Re-read the session and push it to everything rendering from it. */
+export function refreshSession(): void {
+  cached = null;
+  void fetchSession().then((s) => {
+    for (const notify of listeners) notify(s);
+  });
+}
+
 export function useSession() {
-  const [user, setUser] = useState<SessionUser | null>(null);
+  const [state, setState] = useState<SessionState>(SIGNED_OUT);
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
-    fetchSession().then((s) => {
-      setUser(s.user);
+    let alive = true;
+    const apply = (s: SessionState) => {
+      if (!alive) return;
+      setState(s);
       setLoaded(true);
-    });
+    };
+    listeners.add(apply);
+    void fetchSession().then(apply);
+    return () => {
+      alive = false;
+      listeners.delete(apply);
+    };
   }, []);
-  return { user, loaded, setUser, invalidate: () => (cached = null) };
+  return {
+    user: state.user,
+    unreadMessages: state.unreadMessages,
+    loaded,
+    setUser: (user: SessionUser | null) => setState((s) => ({ ...s, user })),
+    invalidate: () => {
+      cached = null;
+    },
+  };
 }
 
 /** Header sign-in state. RSI handle is the identity; passkeys are the key. */
 export function SessionBar() {
-  const { user, loaded, setUser, invalidate } = useSession();
+  const { user, unreadMessages, loaded, setUser, invalidate } = useSession();
   const router = useRouter();
+
+  /*
+   * Re-read on the way back to the tab.
+   *
+   * The session is fetched once and cached for the life of the page, which is right for who
+   * you are and wrong for how much mail you have: a reply that lands while someone is
+   * reading the board would otherwise stay invisible until a full reload. Coming back to
+   * the tab is the moment they are about to look, and it costs one indexed count.
+   *
+   * Only this component listens, not every useSession() caller — one refresh reaches them
+   * all through the broadcast.
+   */
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refreshSession();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
 
   // Never render nothing. A blank slot while the session request is in flight reads as
   // "this site has no way to sign in" — which is exactly how it looked on mobile.
@@ -99,7 +160,10 @@ export function SessionBar() {
 
   return (
     <span className="flex items-center gap-2 text-xs">
-      <Link href="/account" className="flex items-center gap-1.5 text-ink-dim hover:text-ink">
+      <Link
+        href={unreadMessages > 0 ? "/account#inbox" : "/account"}
+        className="flex items-center gap-1.5 text-ink-dim hover:text-ink"
+      >
         {user.avatarUrl && (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={user.avatarUrl} alt="" className="h-4 w-4 rounded-sm" />
@@ -108,6 +172,20 @@ export function SessionBar() {
         {user.isVerified && (
           <span className="text-accent" title="RSI handle verified">
             ✓
+          </span>
+        )}
+        {/*
+          On the name itself rather than a separate bell: the name is the thing already in
+          the header on every page and at every width, and a second icon is one more thing
+          to wrap onto a second line on a phone.
+        */}
+        {unreadMessages > 0 && (
+          <span
+            className="num rounded-full bg-danger px-1.5 py-px text-[10px] font-bold leading-4 text-bg"
+            title={`${unreadMessages} unread message${unreadMessages === 1 ? "" : "s"} in your inbox`}
+            aria-label={`${unreadMessages} unread message${unreadMessages === 1 ? "" : "s"}`}
+          >
+            {unreadMessages > 99 ? "99+" : unreadMessages}
           </span>
         )}
       </Link>

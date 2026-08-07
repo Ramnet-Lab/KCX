@@ -13,7 +13,8 @@
     "check:alerts": "tsx src/scripts/check-alerts.ts",
     "check:orgs": "tsx src/scripts/check-orgs.ts",
     "check:makers": "tsx src/scripts/check-makers.ts",
-    "check:instalments": "tsx src/scripts/check-instalments.ts"
+    "check:instalments": "tsx src/scripts/check-instalments.ts",
+    "check:feedback": "tsx src/scripts/check-feedback.ts"
   },
   "dependencies": {
     "@kcx/db": "workspace:*",

@@ -3,6 +3,7 @@
 import type { IndexLatest, IndexSeries, TickerEntry, TickerUpdate } from "@kcx/shared";
 import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
+import { FeedbackPanel } from "@/components/feedback-panel";
 import { IndexPanel } from "@/components/index-panel";
 import { OrderModal, type OrderModalSeed } from "@/components/order-modal";
 import { TickerWall } from "@/components/ticker-wall";
@@ -61,14 +62,38 @@ export function MarketDashboard({ initialEntries, initialSeries, initialLatest, 
           + Place order
         </button>
       </div>
-      <IndexPanel
-        series={initialSeries}
-        latest={indexLatest}
-        latestAt={lastUpdate}
-        entries={entries}
-        onPlaceOrder={openOrder}
-      />
-      <TickerWall entries={entries} lastUpdate={lastUpdate} flash={flash} onPlaceOrder={openOrder} />
+      {/*
+        The ideas rail goes in the page's right MARGIN, not in a column carved out of the
+        content. `main` is capped at max-w-6xl and centred, so on a wide monitor there is
+        dead space either side of it; the negative right margin lets this grid spill into
+        that space and gives the rail a column of its own. The chart and the wall keep the
+        exact width they had — nothing is squeezed to make room.
+
+        1800px is where the spill actually fits: (1800 − 1152) / 2 = 324px of margin, plus
+        main's own 16px of padding, against a 304px rail and a 24px gap. Below that there
+        is no margin worth the name, so the grid collapses and the rail sits under the
+        chart at full width — same place it lands on a phone.
+      */}
+      <div className="min-[1800px]:-mr-[20.5rem]">
+        <div className="min-[1800px]:grid min-[1800px]:grid-cols-[minmax(0,1fr)_19rem] min-[1800px]:gap-6">
+          <div className="mb-6 min-w-0 min-[1800px]:col-start-1 min-[1800px]:row-start-1">
+            <IndexPanel
+              series={initialSeries}
+              latest={indexLatest}
+              latestAt={lastUpdate}
+              entries={entries}
+              onPlaceOrder={openOrder}
+            />
+          </div>
+          {/* Spans both rows so the rail can run the height of the chart and the wall. */}
+          <div className="mb-6 min-[1800px]:col-start-2 min-[1800px]:row-span-2 min-[1800px]:row-start-1 min-[1800px]:mb-0">
+            <FeedbackPanel signedIn={signedIn} />
+          </div>
+          <div className="min-w-0 min-[1800px]:col-start-1 min-[1800px]:row-start-2">
+            <TickerWall entries={entries} lastUpdate={lastUpdate} flash={flash} onPlaceOrder={openOrder} />
+          </div>
+        </div>
+      </div>
       <OrderModal
         open={orderSeed !== null}
         seed={orderSeed ?? {}}

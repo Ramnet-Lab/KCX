@@ -56,7 +56,8 @@ export function IndexPanel({ series, latest, latestAt, entries, onPlaceOrder }: 
   const seasonVersion = latestBySector.get(sector)?.seasonVersion ?? null;
 
   return (
-    <div className="mb-6 rounded border border-line bg-panel">
+    // Spacing is the grid's, not this panel's — it sits in a row with the ideas rail.
+    <div className="rounded border border-line bg-panel">
       <div className="flex items-center gap-1 border-b border-line px-3 pt-2">
         <button
           onClick={() => setTab("market")}

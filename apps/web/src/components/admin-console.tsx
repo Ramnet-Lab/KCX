@@ -1,8 +1,15 @@
 "use client";
 
+import {
+  FEEDBACK_KIND_LABELS,
+  FEEDBACK_STATUSES,
+  FEEDBACK_STATUS_LABELS,
+  type FeedbackKind,
+  type FeedbackStatus,
+} from "@kcx/shared";
 import { useCallback, useEffect, useState } from "react";
 
-type Tab = "queue" | "users" | "contracts" | "log";
+type Tab = "queue" | "ideas" | "users" | "contracts" | "log";
 
 type Overview = {
   openBreaches: number;
@@ -11,6 +18,23 @@ type Overview = {
   classifiedLive: number;
   bannedUsers: number;
   totalUsers: number;
+  unansweredFeedback: number;
+};
+
+type FeedbackItem = {
+  id: string;
+  kind: FeedbackKind;
+  title: string;
+  body: string;
+  status: FeedbackStatus;
+  createdAt: string;
+  respondedAt: string | null;
+  authorId: string;
+  authorName: string;
+  authorHandle: string;
+  authorRequests: number;
+  reviewedByName: string | null;
+  replies: { body: string; senderName: string | null; createdAt: string }[];
 };
 
 type Breach = {
@@ -77,6 +101,8 @@ export function AdminConsole({ isAdmin }: { isAdmin: boolean }) {
   const [breaches, setBreaches] = useState<Breach[]>([]);
   const [users, setUsers] = useState<ModUser[]>([]);
   const [contracts, setContracts] = useState<AdminContract[]>([]);
+  const [ideas, setIdeas] = useState<FeedbackItem[]>([]);
+  const [ideasClosed, setIdeasClosed] = useState(false);
   const [search, setSearch] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -107,10 +133,17 @@ export function AdminConsole({ isAdmin }: { isAdmin: boolean }) {
     setContracts(body.contracts ?? []);
   }, []);
 
+  const loadIdeas = useCallback(async (includeClosed: boolean) => {
+    const res = await fetch(`/api/admin/feedback${includeClosed ? "?all=1" : ""}`, { cache: "no-store" });
+    const body = await res.json().catch(() => ({}));
+    setIdeas(body.requests ?? []);
+  }, []);
+
   useEffect(() => {
     if (tab === "users") void loadUsers(search);
     if (tab === "contracts") void loadContracts();
-  }, [tab, loadUsers, loadContracts, search]);
+    if (tab === "ideas") void loadIdeas(ideasClosed);
+  }, [tab, loadUsers, loadContracts, loadIdeas, search, ideasClosed]);
 
   const send = async (url: string, body: unknown, key: string) => {
     setBusy(key);
@@ -129,6 +162,7 @@ export function AdminConsole({ isAdmin }: { isAdmin: boolean }) {
       await load();
       if (tab === "users") await loadUsers(search);
       if (tab === "contracts") await loadContracts();
+      if (tab === "ideas") await loadIdeas(ideasClosed);
       return true;
     } finally {
       setBusy(null);
@@ -137,6 +171,7 @@ export function AdminConsole({ isAdmin }: { isAdmin: boolean }) {
 
   const TABS: { key: Tab; label: string; badge?: number }[] = [
     { key: "queue", label: "Breach queue", badge: (overview?.openBreaches ?? 0) + (overview?.disputedBreaches ?? 0) },
+    { key: "ideas", label: "Ideas", badge: overview?.unansweredFeedback ?? 0 },
     { key: "users", label: "Users" },
     { key: "contracts", label: "Contracts" },
     { key: "log", label: "Audit log" },
@@ -145,9 +180,14 @@ export function AdminConsole({ isAdmin }: { isAdmin: boolean }) {
   return (
     <div>
       {overview && (
-        <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+        <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
           <Stat label="Open breaches" value={overview.openBreaches} alert={overview.openBreaches > 0} />
           <Stat label="Contested" value={overview.disputedBreaches} alert={overview.disputedBreaches > 0} />
+          <Stat
+            label="Ideas waiting"
+            value={overview.unansweredFeedback}
+            alert={overview.unansweredFeedback > 0}
+          />
           <Stat label="Live contracts" value={overview.liveContracts} />
           <Stat label="Classified" value={overview.classifiedLive} />
           <Stat label="Banned" value={overview.bannedUsers} />
@@ -178,6 +218,21 @@ export function AdminConsole({ isAdmin }: { isAdmin: boolean }) {
         <BreachQueue breaches={breaches} busy={busy} onRule={(id, action, reason) =>
           send("/api/admin/breaches", { contractId: id, action, reason }, id)
         } />
+      )}
+
+      {tab === "ideas" && (
+        <IdeaQueue
+          items={ideas}
+          busy={busy}
+          showClosed={ideasClosed}
+          onShowClosed={setIdeasClosed}
+          onSend={(requestId, body, status) =>
+            send("/api/admin/feedback", { action: "respond", requestId, body, status }, requestId)
+          }
+          onStatus={(requestId, status) =>
+            send("/api/admin/feedback", { action: "status", requestId, status }, requestId)
+          }
+        />
       )}
 
       {tab === "users" && (
@@ -297,6 +352,180 @@ function BreachQueue({
           </div>
         </article>
       ))}
+    </div>
+  );
+}
+
+const IDEA_STATUS_CLASS: Record<FeedbackStatus, string> = {
+  new: "bg-danger/15 text-danger",
+  reviewing: "bg-accent/15 text-accent",
+  planned: "bg-accent/15 text-accent",
+  shipped: "bg-up/15 text-up",
+  declined: "bg-ink-faint/15 text-ink-faint",
+};
+
+/**
+ * The suggestion box, from this side.
+ *
+ * Oldest first, and unanswered ones are the ones that carry a mark — a request that has been
+ * sitting for a week is the one that costs you the person who filed it. Replying and
+ * re-filing are one action wherever possible: "Not planned, because…" is a single thought
+ * and should not be two buttons that can half-succeed.
+ */
+function IdeaQueue({
+  items,
+  busy,
+  showClosed,
+  onShowClosed,
+  onSend,
+  onStatus,
+}: {
+  items: FeedbackItem[];
+  busy: string | null;
+  showClosed: boolean;
+  onShowClosed: (v: boolean) => void;
+  onSend: (requestId: string, body: string, status: FeedbackStatus) => Promise<boolean>;
+  onStatus: (requestId: string, status: FeedbackStatus) => Promise<boolean>;
+}) {
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [statuses, setStatuses] = useState<Record<string, FeedbackStatus>>({});
+
+  const statusFor = (item: FeedbackItem) => statuses[item.id] ?? item.status;
+
+  return (
+    <div>
+      <label className="mb-3 flex items-center gap-2 text-xs text-ink-faint">
+        <input
+          type="checkbox"
+          checked={showClosed}
+          onChange={(e) => onShowClosed(e.target.checked)}
+          className="accent-accent"
+        />
+        Include shipped and declined
+      </label>
+
+      {items.length === 0 ? (
+        <div className="rounded border border-dashed border-line p-10 text-center text-sm text-ink-faint">
+          Nothing waiting. Ideas sent from the front page land here.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {items.map((item) => {
+            const status = statusFor(item);
+            const draft = drafts[item.id] ?? "";
+            return (
+              <article
+                key={item.id}
+                className={`rounded border bg-panel p-3 ${
+                  item.respondedAt ? "border-line" : "border-accent/40"
+                }`}
+              >
+                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${IDEA_STATUS_CLASS[item.status]}`}>
+                    {FEEDBACK_STATUS_LABELS[item.status]}
+                  </span>
+                  <span className="text-[10px] uppercase tracking-wider text-ink-faint">
+                    {FEEDBACK_KIND_LABELS[item.kind]}
+                  </span>
+                  <h3 className="text-sm font-bold text-ink">{item.title}</h3>
+                  <span className="ml-auto text-[11px] text-ink-faint">{fmtDate(item.createdAt)}</span>
+                </div>
+
+                <p className="mt-1 text-xs text-ink-dim">
+                  <span className="text-ink-faint">From:</span> <span className="text-ink">{item.authorName}</span>
+                  <span className="text-ink-faint"> @{item.authorHandle}</span>
+                  {item.authorRequests > 1 && (
+                    <span className="ml-1 text-ink-faint">({item.authorRequests} filed in total)</span>
+                  )}
+                  {item.reviewedByName && (
+                    <span className="ml-3 text-ink-faint">Last touched by {item.reviewedByName}</span>
+                  )}
+                </p>
+
+                <p className="mt-2 whitespace-pre-wrap rounded border border-line bg-panel-2 p-2 text-xs leading-relaxed text-ink-dim">
+                  {item.body}
+                </p>
+
+                {item.replies.length > 0 && (
+                  <div className="mt-2 space-y-1.5">
+                    {item.replies.map((r, i) => (
+                      <div key={i} className="rounded border border-up/25 bg-up/5 p-2 text-xs">
+                        <p className="mb-1 text-[10px] uppercase tracking-wider text-ink-faint">
+                          Sent {fmtDate(r.createdAt)}
+                          {r.senderName && ` by ${r.senderName}`}
+                        </p>
+                        <p className="whitespace-pre-wrap text-ink-dim">{r.body}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <textarea
+                  value={draft}
+                  onChange={(e) => setDrafts((d) => ({ ...d, [item.id]: e.target.value }))}
+                  rows={3}
+                  placeholder="Your reply — this goes to their inbox with your name on it"
+                  className="mt-2 w-full resize-y rounded border border-line bg-bg px-2 py-1.5 text-xs leading-relaxed text-ink placeholder:text-ink-faint focus:outline-none"
+                />
+
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <label className="flex items-center gap-1.5 text-[11px] text-ink-faint">
+                    File as
+                    <select
+                      value={status}
+                      onChange={(e) => setStatuses((s) => ({ ...s, [item.id]: e.target.value as FeedbackStatus }))}
+                      aria-label={`Status for "${item.title}"`}
+                      className="rounded border border-line bg-bg px-1.5 py-1 text-[11px] text-ink focus:outline-none"
+                    >
+                      {FEEDBACK_STATUSES.map((s) => (
+                        <option key={s} value={s}>
+                          {FEEDBACK_STATUS_LABELS[s]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <button
+                    onClick={async () => {
+                      if (await onSend(item.id, draft.trim(), status)) {
+                        setDrafts((d) => ({ ...d, [item.id]: "" }));
+                        setStatuses((s) => {
+                          const { [item.id]: _drop, ...rest } = s;
+                          return rest;
+                        });
+                      }
+                    }}
+                    disabled={busy === item.id || draft.trim().length < 2}
+                    className="tap rounded bg-up/20 px-3 py-1 text-xs font-bold text-up hover:bg-up/30 disabled:opacity-40"
+                  >
+                    Send reply
+                  </button>
+
+                  {/* Re-filing without writing: triage passes, where there is nothing to say yet. */}
+                  <button
+                    onClick={async () => {
+                      if (await onStatus(item.id, status)) {
+                        setStatuses((s) => {
+                          const { [item.id]: _drop, ...rest } = s;
+                          return rest;
+                        });
+                      }
+                    }}
+                    disabled={busy === item.id || status === item.status}
+                    className="tap rounded border border-line px-3 py-1 text-xs text-ink-dim hover:text-ink disabled:opacity-30"
+                  >
+                    File only
+                  </button>
+
+                  <span className="text-[11px] text-ink-faint">
+                    {item.respondedAt ? `Answered ${fmtDate(item.respondedAt)}` : "No reply sent yet"}
+                  </span>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
