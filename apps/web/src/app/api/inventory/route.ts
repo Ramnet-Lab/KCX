@@ -1,4 +1,4 @@
-import { getDb, listInventory, removeInventory, resolveOrCreateItem, setInventory } from "@kcx/db";
+import { getDb, listInventory, removeInventory, resolveOrCreateItem, setInventory, wipeInventory } from "@kcx/db";
 import { ITEM_NAME_MAX } from "@kcx/shared";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -14,16 +14,28 @@ export const dynamic = "force-dynamic";
  * mechanic. Nothing here is readable by anyone else, and the board never joins to it.
  */
 
+/*
+ * Item ids arrive as strings as readily as numbers — `bazaar_items.id` is a bigint, and
+ * anything that reads one straight out of a pg row hands back a string. Coercing here rather
+ * than trusting the caller means a stringly id is accepted instead of being rejected as an
+ * unexplained "Invalid request".
+ */
+const itemIdInput = z.coerce.number().int().positive();
+
 const saveInput = z.object({
   /** Existing catalogue entry… */
-  itemId: z.number().int().positive().optional(),
+  itemId: itemIdInput.optional(),
   /** …or a name to resolve, creating the catalogue row when it is genuinely new. */
   itemName: z.string().trim().min(2).max(ITEM_NAME_MAX).optional(),
   quantity: z.number().int().min(0).max(100_000),
   note: z.string().trim().max(300).nullable().optional(),
 });
 
-const deleteInput = z.object({ itemId: z.number().int().positive() });
+/** One line by id, or the lot. */
+const deleteInput = z.union([
+  z.object({ all: z.literal(true) }),
+  z.object({ itemId: itemIdInput }),
+]);
 
 export async function GET() {
   const user = await currentUser();
@@ -82,6 +94,19 @@ export async function DELETE(request: Request) {
 
   try {
     const db = getDb();
+
+    if ("all" in parsed.data) {
+      const { removed, kept } = await wipeInventory(db, user.id);
+      return NextResponse.json({
+        ok: true,
+        inventory: await listInventory(db, user.id),
+        // Said plainly rather than silently doing less than asked.
+        message: kept
+          ? `Cleared ${removed} line(s). ${kept} kept — still on a live listing.`
+          : `Cleared ${removed} line(s).`,
+      });
+    }
+
     const result = await removeInventory(db, user.id, parsed.data.itemId);
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: 409 });
     return NextResponse.json({ ok: true, inventory: await listInventory(db, user.id) });

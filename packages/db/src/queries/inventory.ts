@@ -29,12 +29,21 @@ export type InventoryRow = {
 /**
  * Statuses that still hold units. A sold_out or cancelled listing has released whatever it
  * was holding, and an expired one puts its remainder back on the shelf.
+ *
+ * `paused` holds, because a paused listing keeps its remaining quantity and can be resumed in
+ * one click — treating those units as free is precisely the double-sale this tab exists to
+ * stop. This previously read `('active', 'reserved')`, and no listing has ever had the status
+ * `reserved`: it is not in the enum. So the second half matched nothing and paused stock
+ * silently counted as available.
  */
-const ACTIVE_LISTING = sql`l.status IN ('active', 'reserved')`;
+const ACTIVE_LISTING = sql`l.status IN ('active', 'paused')`;
 
 export async function listInventory(db: Db, userId: string): Promise<InventoryRow[]> {
   const result = await db.execute<{
-    item_id: number;
+    // `bazaar_items.id` is a bigint, which node-postgres hands back as a STRING. Typing it as
+    // a number here is what let the raw value reach the client, where it failed every
+    // `z.number()` the API guards its input with.
+    item_id: string;
     name: string;
     section: string | null;
     category: string | null;
@@ -70,7 +79,7 @@ export async function listInventory(db: Db, userId: string): Promise<InventoryRo
     const held = Number(r.held);
     const committed = Number(r.committed);
     return {
-      itemId: r.item_id,
+      itemId: Number(r.item_id),
       name: r.name,
       section: r.section,
       category: r.category,
@@ -146,6 +155,40 @@ export async function removeInventory(
     }
     await tx.execute(sql`DELETE FROM user_inventory WHERE user_id = ${userId} AND item_id = ${itemId}`);
     return { ok: true as const };
+  });
+}
+
+/**
+ * Clear the whole stock list in one go.
+ *
+ * Lines whose units are promised on a live listing are kept back rather than silently taken
+ * with the rest, which is the same rule `removeInventory` applies one line at a time — a wipe
+ * is a bulk convenience, not a way around the check that stops a seller offering units they
+ * have just declared they don't hold. The count of what stayed is returned so the caller can
+ * say so instead of quietly doing less than asked.
+ */
+export async function wipeInventory(
+  db: Db,
+  userId: string,
+): Promise<{ removed: number; kept: number }> {
+  return db.transaction(async (tx) => {
+    const result = await tx.execute<{ item_id: string }>(sql`
+      DELETE FROM user_inventory inv
+      WHERE inv.user_id = ${userId}
+        AND NOT EXISTS (
+          SELECT 1 FROM bazaar_listings l
+          WHERE l.seller_id = inv.user_id AND l.item_id = inv.item_id
+            AND l.intent = 'sell' AND ${ACTIVE_LISTING}
+            AND l.remaining_quantity > 0
+        )
+      RETURNING inv.item_id::text
+    `);
+    const [{ n } = { n: "0" }] = (
+      await tx.execute<{ n: string }>(sql`
+        SELECT count(*)::text AS n FROM user_inventory WHERE user_id = ${userId}
+      `)
+    ).rows;
+    return { removed: result.rows.length, kept: Number(n) };
   });
 }
 

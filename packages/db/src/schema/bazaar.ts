@@ -211,6 +211,16 @@ export const bazaarListings = pgTable(
     locationId: integer("location_id").references(() => locations.id),
 
     status: text("status", { enum: BAZAAR_LISTING_STATUSES }).notNull().default("active"),
+    /**
+     * Filed away by the seller, so their desk shows what they are working on rather than
+     * everything they have ever posted.
+     *
+     * Deliberately not a status: archiving is a view preference belonging to the seller,
+     * while status describes what the listing IS to everyone else. Folding it into the enum
+     * would have made "archived" a thing buyers could observe, and would have destroyed the
+     * record of how the listing actually ended.
+     */
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
     /** Board sort key; bumping is rate-limited in the API, as on the order board. */
     bumpedAt: timestamp("bumped_at", { withTimezone: true }).notNull().defaultNow(),
     /** When an unsold buy-now listing drops off the board. */
@@ -221,6 +231,7 @@ export const bazaarListings = pgTable(
   (t) => [
     index("bazaar_board").on(t.status, t.bumpedAt),
     index("bazaar_seller").on(t.sellerId, t.status),
+    index("bazaar_listings_archived").on(t.sellerId, t.archivedAt),
     index("bazaar_category").on(t.category, t.status),
     /** "What did this item last go for" walks listings by item, newest first. */
     index("bazaar_listings_item").on(t.itemId, t.createdAt),

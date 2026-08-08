@@ -23,6 +23,7 @@ export function InventoryTab({ initial }: { initial: InventoryRow[] }) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => setRows(initial), [initial]);
@@ -46,6 +47,36 @@ export function InventoryTab({ initial }: { initial: InventoryRow[] }) {
     } catch {
       setError("Network error");
       return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Clear the lot. Lines still promised on a live listing are kept back and reported. */
+  const wipe = async () => {
+    if (!confirm(`Remove all ${rows.length} inventory line(s)?
+
+This only clears your own stock list — it does not touch any listing.`)) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/inventory", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ all: true }),
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(out.error ?? "Could not clear");
+        return;
+      }
+      if (out.inventory) setRows(out.inventory);
+      if (out.message) setNotice(out.message);
+    } catch {
+      setError("Network error");
     } finally {
       setBusy(false);
     }
@@ -111,6 +142,24 @@ export function InventoryTab({ initial }: { initial: InventoryRow[] }) {
 
       {error && (
         <div className="mb-3 rounded border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">{error}</div>
+      )}
+      {notice && (
+        <div className="mb-3 rounded border border-line bg-panel-2 px-3 py-2 text-xs text-ink-dim">{notice}</div>
+      )}
+
+      {rows.length > 0 && (
+        <div className="mb-2 flex justify-end">
+          {/*
+            Asks first: a stock take can be a lot of typing, and there is no undo for it.
+          */}
+          <button
+            onClick={() => void wipe()}
+            disabled={busy}
+            className="tap rounded px-2 py-1 text-[11px] text-ink-faint hover:text-danger disabled:opacity-40"
+          >
+            Wipe inventory
+          </button>
+        </div>
       )}
 
       {rows.length === 0 ? (

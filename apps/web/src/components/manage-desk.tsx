@@ -44,6 +44,7 @@ export function ManageDesk({
   instalmentEligibility,
   pendingRatings,
   inventory,
+  archivedListings,
 }: {
   listings: BazaarListingDto[];
   sales: BazaarSaleDto[];
@@ -57,6 +58,7 @@ export function ManageDesk({
   instalmentEligibility: { allowed: boolean; reason: string | null } | null;
   pendingRatings: { saleId: string; counterpartyName: string; title: string }[];
   inventory: InventoryRow[];
+  archivedListings: BazaarListingDto[];
 }) {
   // Conversations open first when any are waiting: somebody is holding a question, and an
   // unanswered buyer goes back to Discord and doesn't return.
@@ -86,6 +88,21 @@ export function ManageDesk({
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
     });
+
+  /*
+   * Erasing a listing asks first, and says what it is about to destroy.
+   *
+   * Everything else on this desk is reversible — a cancelled listing relists, an archived one
+   * comes back. This one isn't, so it is the only control here that stops and checks.
+   */
+  const destroy = (id: string, title: string) => {
+    if (!confirm(`Permanently delete "${title}"?
+
+Its photos, bids and history go with it. This cannot be undone.`)) {
+      return;
+    }
+    return call(id, `/api/bazaar/${id}`, { method: "DELETE" });
+  };
 
   // Badge counts are "needs you", not totals: a number that only ever grows stops meaning
   // anything, and the point of the badge is to pull someone to the tab with work in it.
@@ -151,7 +168,15 @@ export function ManageDesk({
       )}
 
       {tab === "messages" && <MessagesTab threads={threads} onChanged={() => router.refresh()} />}
-      {tab === "selling" && <SellingTab listings={listings} busy={busy} onAct={patch} />}
+      {tab === "selling" && (
+        <SellingTab
+          listings={listings}
+          archived={archivedListings}
+          busy={busy}
+          onAct={patch}
+          onDelete={destroy}
+        />
+      )}
       {tab === "inventory" && <InventoryTab initial={inventory} />}
       {tab === "sales" && <SalesTab sales={sales} busy={busy} onAct={patch} />}
       {tab === "contracts" && <ContractsTab contracts={serviceContracts} busy={busy} onAct={patch} />}
@@ -261,14 +286,20 @@ function MessagesTab({ threads, onChanged }: { threads: BazaarThreadDto[]; onCha
 
 function SellingTab({
   listings,
+  archived,
   busy,
   onAct,
+  onDelete,
 }: {
   listings: BazaarListingDto[];
+  archived: BazaarListingDto[];
   busy: string | null;
   onAct: ActFn;
+  onDelete: (id: string, title: string) => void;
 }) {
-  if (listings.length === 0) {
+  const [showArchive, setShowArchive] = useState(false);
+
+  if (listings.length === 0 && archived.length === 0) {
     return (
       <Empty>
         <p className="mb-1 text-ink">You haven&apos;t listed anything.</p>
@@ -289,15 +320,36 @@ function SellingTab({
     <div className="space-y-4">
       <Section title="On the board" count={live.length}>
         {live.map((l) => (
-          <ListingRow key={l.id} listing={l} busy={busy} onAct={onAct} />
+          <ListingRow key={l.id} listing={l} busy={busy} onAct={onAct} onDelete={onDelete} />
         ))}
       </Section>
       {ended.length > 0 && (
         <Section title="Ended" count={ended.length}>
           {ended.map((l) => (
-            <ListingRow key={l.id} listing={l} busy={busy} onAct={onAct} />
+            <ListingRow key={l.id} listing={l} busy={busy} onAct={onAct} onDelete={onDelete} />
           ))}
         </Section>
+      )}
+      {archived.length > 0 && (
+        <div>
+          {/*
+            Collapsed by default. The archive exists so the desk shows current work; opening
+            with it expanded would put back exactly what filing it away was meant to remove.
+          */}
+          <button
+            onClick={() => setShowArchive((v) => !v)}
+            className="tap text-xs font-bold uppercase tracking-wider text-ink-faint hover:text-accent"
+          >
+            {showArchive ? "▾" : "▸"} Archived <span className="num text-ink-dim">{archived.length}</span>
+          </button>
+          {showArchive && (
+            <div className="mt-2 space-y-2">
+              {archived.map((l) => (
+                <ListingRow key={l.id} listing={l} busy={busy} onAct={onAct} onDelete={onDelete} />
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -315,10 +367,21 @@ function Section({ title, count, children }: { title: string; count: number; chi
   );
 }
 
-function ListingRow({ listing: l, busy, onAct }: { listing: BazaarListingDto; busy: string | null; onAct: ActFn }) {
+function ListingRow({
+  listing: l,
+  busy,
+  onAct,
+  onDelete,
+}: {
+  listing: BazaarListingDto;
+  busy: string | null;
+  onAct: ActFn;
+  onDelete: (id: string, title: string) => void;
+}) {
   const isAuction = l.listingType !== "buy_now";
   const live = l.status === "active" || l.status === "paused";
   const ended = ["expired", "cancelled", "sold_out"].includes(l.status);
+  const isArchived = l.archivedAt != null;
 
   return (
     <article className="flex flex-wrap items-center gap-3 rounded border border-line bg-panel p-3">
@@ -392,6 +455,30 @@ function ListingRow({ listing: l, busy, onAct }: { listing: BazaarListingDto; bu
         {live && (
           <button onClick={() => onAct(l.id, `/api/bazaar/${l.id}`, { action: "cancel" })} disabled={busy === l.id} className={btnDanger}>
             take down
+          </button>
+        )}
+        {/*
+          Only ever offered on a finished listing. Filing away something still on the board
+          would hide it from the one person responsible for answering it.
+        */}
+        {ended && (
+          <button
+            onClick={() => onAct(l.id, `/api/bazaar/${l.id}`, { action: isArchived ? "unarchive" : "archive" })}
+            disabled={busy === l.id}
+            className={btn}
+            title={isArchived ? "Put it back on the desk" : "File it away — nothing is lost, and you can bring it back"}
+          >
+            {isArchived ? "unarchive" : "archive"}
+          </button>
+        )}
+        {ended && (
+          <button
+            onClick={() => onDelete(l.id, l.title)}
+            disabled={busy === l.id}
+            className={btnDanger}
+            title="Erase it and its photos for good"
+          >
+            delete
           </button>
         )}
       </div>

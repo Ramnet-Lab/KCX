@@ -4,6 +4,7 @@ import {
   bazaarEvents,
   bazaarListings,
   bazaarSales,
+  deleteListing,
   getBazaarListing,
   getDb,
 } from "@kcx/db";
@@ -11,6 +12,7 @@ import { BAZAAR_DEFAULT_HOURS, bazaarActionInput } from "@kcx/shared";
 import { and, eq, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/session";
+import { removeUploadedImage } from "@/lib/uploads";
 
 export const dynamic = "force-dynamic";
 
@@ -110,6 +112,27 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
             data: { hadBids: l.bidCount },
           });
           return { status: 200, body: { ok: true, status: "cancelled" } };
+        }
+
+        /*
+         * Filing a finished listing off the desk, and putting it back.
+         *
+         * Purely the seller's own view — nothing about the listing changes for anyone else,
+         * which is why it is a timestamp rather than a status. A listing still on the board
+         * can't be filed away: hiding it from yourself while buyers can still act on it is
+         * how you end up ignoring a sale you agreed to.
+         */
+        case "archive":
+        case "unarchive": {
+          const archiving = action === "archive";
+          if (archiving && ["active", "paused"].includes(l.status)) {
+            return { status: 409, body: { error: "This listing is still on the board — take it down first." } };
+          }
+          await tx
+            .update(bazaarListings)
+            .set({ archivedAt: archiving ? now : null, updatedAt: now })
+            .where(eq(bazaarListings.id, l.id));
+          return { status: 200, body: { ok: true, archived: archiving } };
         }
 
         case "bump": {
@@ -227,5 +250,36 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   } catch (err) {
     console.error("[bazaar:action]", err instanceof Error ? err.message : err);
     return NextResponse.json({ error: "Action failed" }, { status: 500 });
+  }
+}
+
+/**
+ * DELETE — erase the listing for good.
+ *
+ * Separate from the archive action because it is a different promise: archiving is a view
+ * preference the seller can undo, this is gone. Refused once a sale has been struck, since
+ * that record belongs to the counterparty as much as to the seller — those archive instead.
+ *
+ * The image files are dropped after the row commits, not inside the transaction: a failed
+ * unlink must not roll back a delete the database has already agreed to, and an orphaned
+ * file is a wasted byte where an orphaned row is a broken desk.
+ */
+export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const user = await currentUser();
+  if (!user) return NextResponse.json({ error: "Sign in first" }, { status: 401 });
+
+  try {
+    const isMod = user.role === "mod" || user.role === "admin";
+    const result = await deleteListing(getDb(), { listingId: id, userId: user.id, isMod });
+    if (!result.ok) {
+      const notFound = result.error === "Listing not found";
+      return NextResponse.json({ error: result.error }, { status: notFound ? 404 : 409 });
+    }
+    await Promise.all(result.images.map((f) => removeUploadedImage("bazaar", f)));
+    return NextResponse.json({ ok: true, deleted: result.images.length });
+  } catch (err) {
+    console.error("[bazaar:delete]", err instanceof Error ? err.message : err);
+    return NextResponse.json({ error: "Could not delete" }, { status: 500 });
   }
 }

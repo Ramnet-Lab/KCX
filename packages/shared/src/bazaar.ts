@@ -150,7 +150,7 @@ export const bazaarEditInput = z.object({
 export type BazaarEditInput = z.infer<typeof bazaarEditInput>;
 
 export const bazaarActionInput = z.object({
-  action: z.enum(["pause", "resume", "cancel", "bump", "relist", "edit"]),
+  action: z.enum(["pause", "resume", "cancel", "bump", "relist", "edit", "archive", "unarchive"]),
   /** `relist` only: how long the new run lasts. */
   runForHours: z.number().int().positive().max(BAZAAR_MAX_HOURS).optional(),
   /** `edit` only. */

@@ -56,6 +56,7 @@ export default async function ManagePage() {
   let eligibility: { allowed: boolean; reason: string | null } | null = null;
   let toRate: { saleId: string; counterpartyName: string; title: string }[] = [];
   let inventory: InventoryRow[] = [];
+  let archivedListings: BazaarListingDto[] = [];
 
   /*
    * allSettled, not all.
@@ -91,6 +92,7 @@ export default async function ManagePage() {
       canUseInstalments(db, user.id),
       pendingBazaarRatings(db, user.id),
       listInventory(db, user.id),
+      myBazaarListings(db, user.id, "only"),
     ]);
     settled.forEach((r, i) => {
       if (r.status === "rejected") {
@@ -111,6 +113,7 @@ export default async function ManagePage() {
     eligibility = val(9, eligibility);
     toRate = val(10, toRate);
     inventory = val(11, inventory);
+    archivedListings = val(12, archivedListings);
   } catch (err) {
     console.error("[manage page]", err instanceof Error ? err.message : err);
   }
@@ -139,6 +142,7 @@ export default async function ManagePage() {
         instalmentEligibility={eligibility}
         pendingRatings={toRate}
         inventory={inventory}
+        archivedListings={archivedListings}
       />
     </>
   );

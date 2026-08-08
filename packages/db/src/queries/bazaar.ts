@@ -138,6 +138,8 @@ export type BazaarListingDto = {
   createdAt: string;
   bumpedAt: string;
   expiresAt: string;
+  /** Set once the seller has filed it away off their desk. Never surfaced to buyers. */
+  archivedAt: string | null;
 };
 
 export type BazaarListOptions = {
@@ -153,6 +155,14 @@ export type BazaarListOptions = {
   mineOnly?: boolean;
   sort?: "newest" | "ending" | "price_asc" | "price_desc";
   limit?: number;
+  /**
+   * Archived listings are hidden by default, everywhere.
+   *
+   * Defaulting to "exclude" rather than making each caller remember is deliberate: the board,
+   * the item history and every other reader wants them gone, and only the seller's own desk
+   * ever asks for them back.
+   */
+  archived?: "exclude" | "only" | "any";
 };
 
 type ListingRow = {
@@ -190,6 +200,7 @@ type ListingRow = {
   created_at: string | Date;
   bumped_at: string | Date;
   expires_at: string | Date;
+  archived_at: string | Date | null;
 };
 
 function toListingDto(r: ListingRow, viewer: string | null, standing: BazaarStanding): BazaarListingDto {
@@ -244,6 +255,7 @@ function toListingDto(r: ListingRow, viewer: string | null, standing: BazaarStan
     createdAt: new Date(r.created_at).toISOString(),
     bumpedAt: new Date(r.bumped_at).toISOString(),
     expiresAt: new Date(r.expires_at).toISOString(),
+    archivedAt: r.archived_at != null ? new Date(r.archived_at).toISOString() : null,
   };
 }
 
@@ -262,7 +274,7 @@ function listingSelect(viewer: string | null) {
            s.is_verified AS seller_verified,
            img.files AS images,
            mine.amount::text AS my_bid,
-           l.created_at, l.bumped_at, l.expires_at
+           l.created_at, l.bumped_at, l.expires_at, l.archived_at
     FROM bazaar_listings l
     JOIN users s ON s.id = l.seller_id
     LEFT JOIN users hb ON hb.id = l.current_bidder_id
@@ -309,6 +321,13 @@ export async function listBazaarListings(db: Db, opts: BazaarListOptions = {}): 
       ${opts.listingType ? sql`AND l.listing_type = ${opts.listingType}` : sql``}
       ${opts.sellerId ? sql`AND l.seller_id = ${opts.sellerId}::uuid` : sql``}
       ${opts.mineOnly && viewer ? sql`AND l.seller_id = ${viewer}::uuid` : sql``}
+      ${
+        opts.archived === "only"
+          ? sql`AND l.archived_at IS NOT NULL`
+          : opts.archived === "any"
+            ? sql``
+            : sql`AND l.archived_at IS NULL`
+      }
       ${search ? sql`AND (l.title ILIKE ${`%${search}%`} OR l.description ILIKE ${`%${search}%`})` : sql``}
     ORDER BY ${order}
     LIMIT ${Math.min(opts.limit ?? 120, 500)}
@@ -1051,13 +1070,79 @@ export async function rateBazaarSale(
  * Everything a trader needs on their own listings: live ones, plus the ones that ended so
  * they can relist. Sales come from listBazaarSales alongside it.
  */
-export async function myBazaarListings(db: Db, userId: string): Promise<BazaarListingDto[]> {
+export async function myBazaarListings(
+  db: Db,
+  userId: string,
+  archived: "exclude" | "only" = "exclude",
+): Promise<BazaarListingDto[]> {
   return listBazaarListings(db, {
     viewerId: userId,
     sellerId: userId,
     statuses: ["active", "paused", "sold_out", "expired", "cancelled"],
     sort: "newest",
     limit: 300,
+    archived,
+  });
+}
+
+/**
+ * Erase a listing and everything hanging off it.
+ *
+ * Refused outright once a sale exists against it. A sale is a two-party record — it feeds the
+ * counterparty's completion rate and their side of the trade history — so letting one party
+ * delete it would let a seller quietly edit someone else's reputation. Those get archived
+ * instead, which is what archiving is for.
+ *
+ * Everything else the listing owns is genuinely its own and goes with it: bids (all already
+ * released by the cancel that had to precede this), events, loadout components, image rows
+ * and any conversation threads. Deleted oldest-dependency-first because the FKs are real.
+ */
+export async function deleteListing(
+  db: Db,
+  opts: { listingId: string; userId: string; isMod?: boolean },
+): Promise<{ ok: true; images: string[] } | { ok: false; error: string }> {
+  return db.transaction(async (tx) => {
+    const [l] = await tx
+      .select()
+      .from(bazaarListings)
+      .where(eq(bazaarListings.id, opts.listingId))
+      .for("update");
+    if (!l) return { ok: false as const, error: "Listing not found" };
+    if (l.sellerId !== opts.userId && !opts.isMod) return { ok: false as const, error: "Not your listing" };
+    if (l.status === "active" || l.status === "paused") {
+      return { ok: false as const, error: "This listing is still on the board — take it down first." };
+    }
+
+    const [{ n } = { n: 0 }] = await tx
+      .select({ n: sql<number>`count(*)::int` })
+      .from(bazaarSales)
+      .where(eq(bazaarSales.listingId, l.id));
+    if (n > 0) {
+      return {
+        ok: false as const,
+        error: `${n} sale(s) were struck on this listing, so it can't be erased — archive it instead.`,
+      };
+    }
+
+    // Returned so the caller can drop the files too; rows alone would leave them orphaned.
+    const images = await tx
+      .select({ filename: bazaarListingImages.filename })
+      .from(bazaarListingImages)
+      .where(eq(bazaarListingImages.listingId, l.id));
+
+    await tx.execute(sql`
+      DELETE FROM bazaar_messages WHERE thread_id IN (
+        SELECT id FROM bazaar_threads WHERE listing_id = ${l.id}::uuid
+      )
+    `);
+    await tx.execute(sql`DELETE FROM bazaar_threads WHERE listing_id = ${l.id}::uuid`);
+    await tx.execute(sql`DELETE FROM bazaar_bids WHERE listing_id = ${l.id}::uuid`);
+    await tx.execute(sql`DELETE FROM bazaar_events WHERE listing_id = ${l.id}::uuid`);
+    await tx.execute(sql`DELETE FROM bazaar_listing_components WHERE listing_id = ${l.id}::uuid`);
+    await tx.execute(sql`DELETE FROM bazaar_listing_images WHERE listing_id = ${l.id}::uuid`);
+    await tx.execute(sql`DELETE FROM bazaar_listings WHERE id = ${l.id}::uuid`);
+
+    return { ok: true as const, images: images.map((i) => i.filename) };
   });
 }
 
