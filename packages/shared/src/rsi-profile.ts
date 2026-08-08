@@ -45,6 +45,8 @@ export type RsiProfile = {
 };
 
 export const RSI_PROFILE_BASE = "https://robertsspaceindustries.com/citizens";
+/** An org's public RSI page: what we read a charter code from, and where we send people. */
+export const RSI_ORG_BASE = "https://robertsspaceindustries.com/orgs";
 
 /** Handles are alphanumeric + underscore; anything else is a bad request, not a fetch. */
 export const RSI_HANDLE_RE = /^[A-Za-z0-9_-]{3,60}$/;

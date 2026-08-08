@@ -1,6 +1,7 @@
 "use client";
 
 import type { OrgDto, OrgMemberDto, OrgProposalDto, OrgSummaryDto } from "@kcx/db";
+import { RSI_ORG_BASE } from "@kcx/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -338,7 +339,7 @@ function ClaimPanel({
             {busy ? "Checking…" : "I've pasted it — check now"}
           </button>
           <a
-            href={`https://robertsspaceindustries.com/orgs/${org.sid}`}
+            href={`${RSI_ORG_BASE}/${encodeURIComponent(org.sid)}`}
             target="_blank"
             rel="noopener noreferrer"
             className="ml-2 text-[11px] text-ink-faint hover:text-accent"

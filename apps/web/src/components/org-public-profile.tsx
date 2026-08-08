@@ -1,6 +1,7 @@
 "use client";
 
 import type { BazaarListingDto, OrgDto, ServiceContractDto } from "@kcx/db";
+import { RSI_ORG_BASE } from "@kcx/shared";
 import Link from "next/link";
 import { fmtAuec, timeLeft } from "@/lib/countdown";
 
@@ -82,6 +83,23 @@ export function OrgPublicProfile({
               {org.memberCount} member{org.memberCount === 1 ? "" : "s"} on KCX
               {org.charterHolderName && ` · led by ${org.charterHolderName}`}
             </p>
+            {/*
+              Straight through to RSI.
+
+              Our roster only ever shows the members who also use KCX, and our record only
+              covers trades settled here — so for anyone sizing up a counterparty, the org's
+              own page is the fuller and more authoritative source. Recruitment, real member
+              count and official contact channels all live there, and none of it is ours to
+              restate.
+            */}
+            <a
+              href={`${RSI_ORG_BASE}/${encodeURIComponent(org.sid)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-0.5 inline-block text-xs text-ink-faint hover:text-accent"
+            >
+              Official RSI org page ↗
+            </a>
           </div>
           {contactSlot}
         </div>

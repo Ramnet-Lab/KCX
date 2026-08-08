@@ -8,7 +8,7 @@ import {
   noteOrgVerificationAttempt,
   startOrgVerification,
 } from "@kcx/db";
-import { generateVerificationCode } from "@kcx/shared";
+import { generateVerificationCode, RSI_ORG_BASE } from "@kcx/shared";
 import { eq } from "drizzle-orm";
 import { randomInt } from "node:crypto";
 import { storeUploadedImage } from "@/lib/uploads";
@@ -28,7 +28,7 @@ import { storeUploadedImage } from "@/lib/uploads";
  * cooldown per attempt. A human clicking "check" should look like a human loading the page.
  */
 
-export const ORG_PAGE_BASE = "https://robertsspaceindustries.com/orgs";
+export const ORG_PAGE_BASE = RSI_ORG_BASE;
 const UA = "KCX/0.1 (Kestrel Commodities Exchange, unofficial Star Citizen fan project)";
 
 export type OrgVerifyOutcome =
@@ -52,19 +52,51 @@ const stripTags = (html: string) =>
     .replace(/&amp;/g, "&")
     .trim();
 
+/** The three charter panes, by the id RSI gives each content block. */
+const CHARTER_TAB_IDS = ["tab-history", "tab-manifesto", "tab-charter"] as const;
+
+/**
+ * Slice a `<div>` and everything it contains, counting nesting so the block ends at its OWN
+ * closing tag.
+ *
+ * A lazy `[\s\S]*?</div>` cannot do this: org descriptions are user-authored HTML and routinely
+ * contain nested divs, so the first `</div>` is usually an inner one. Returns null on an
+ * unbalanced block rather than running to the end of the document — over-reading would let a
+ * code pasted anywhere on the page count as proof.
+ */
+function sliceBalancedDiv(html: string, openIndex: number): string | null {
+  const tags = /<div\b|<\/div\s*>/gi;
+  tags.lastIndex = openIndex;
+  let depth = 0;
+  for (let m = tags.exec(html); m; m = tags.exec(html)) {
+    depth += m[0][1] === "/" ? -1 : 1;
+    if (depth === 0) return html.slice(openIndex, tags.lastIndex);
+  }
+  return null;
+}
+
 /**
  * Pull the org's public description blocks.
  *
- * All three live under `js-show-description-content`, one per tab. Read together rather than
- * insisting on a particular one: a leader told to "paste it in your charter" will sometimes
- * put it in the history, and refusing that would be pedantry rather than security — every
- * one of these fields requires the same org-admin rights to edit.
+ * Read all three together rather than insisting on a particular one: a leader told to "paste it
+ * in your charter" will sometimes put it in the history, and refusing that would be pedantry
+ * rather than security — every one of these fields requires the same org-admin rights to edit.
+ *
+ * Scoped to the three panes by id. `js-show-description-content` looks like the right hook but
+ * is NOT: RSI puts that class on the three tab <a> links in the nav, not on the content. Keying
+ * off it matched the nav and stopped at the `</div>` closing the nav — so the extract was the
+ * strings "History Manifesto Charter" and nothing else, and no code ever matched, in any field.
  */
 export function extractCharterText(html: string): string {
-  const blocks = html.match(/class="[^"]*js-show-description-content[^"]*"[\s\S]{0,20000}?<\/div>/gi) ?? [];
-  // The logo alt text and org name also sit on the page; including the whole body would let
-  // a code pasted anywhere at all count, so this stays scoped to the editable blocks.
-  return blocks.map(stripTags).join("\n");
+  return CHARTER_TAB_IDS.map((id) => {
+    // `\s` before `id` so this can't match the nav links' `data-content_id="tab-history"`.
+    const open = html.search(new RegExp(`<div[^>]*\\sid="${id}"`, "i"));
+    if (open === -1) return "";
+    const block = sliceBalancedDiv(html, open);
+    return block ? stripTags(block) : "";
+  })
+    .filter(Boolean)
+    .join("\n");
 }
 
 /** RSI's org logo, so an org's listings can carry its own badge. */
@@ -74,7 +106,18 @@ export function extractOrgLogoUrl(html: string): string | null {
   return m[1].startsWith("http") ? m[1] : `https://robertsspaceindustries.com${m[1]}`;
 }
 
-const normalise = (s: string) => s.replace(/\s+/g, "").toUpperCase();
+/**
+ * Compare ignoring whitespace, case, and which flavour of dash RSI decided to render.
+ *
+ * Org descriptions go through RSI's Textile renderer, which rewrites typography: a spaced
+ * hyphen becomes an en dash (`&#8211;`). Our codes have no spaces so they survive as typed, but
+ * a leader who reformats the code while pasting shouldn't be told their org can't be verified.
+ */
+const normalise = (s: string) =>
+  s
+    .replace(/&#(?:8211|8212|45);|&[mn]dash;|[‐-―−]/gi, "-")
+    .replace(/\s+/g, "")
+    .toUpperCase();
 
 /**
  * Check the org page for the outstanding code, and on success cache the logo.

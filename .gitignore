@@ -13,6 +13,17 @@ dist/
 .pgdata/
 tools/
 
+# The root agent guide. Holds the deploy runbook including the host's root password, and this
+# repo is public — so it stays local and is never pushed. Anchored with a leading slash: the
+# committed apps/web/AGENTS.md (written by `next dev`) must keep tracking normally.
+/AGENTS.md
+/CLAUDE.md
+*.local.md
+
+# Agent scratch. Local-only notes and plans that shouldn't reach the history.
+.claude/settings.local.json
+scratchpad/
+
 # misc
 .DS_Store
 Thumbs.db

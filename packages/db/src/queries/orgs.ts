@@ -34,7 +34,19 @@ export const ORG_AUTHORITY_STALE_DAYS = 60;
 /** Where the charter code has to appear. All three are org-admin-only fields on RSI. */
 export const ORG_CHARTER_FIELDS = ["Charter", "History", "Manifesto"] as const;
 
-export const ORG_CODE_TTL_MINUTES = 60;
+/**
+ * A day, not an hour.
+ *
+ * Editing an org's RSI charter is not a thing every leader can do in one sitting — the code
+ * has to survive going and finding the page, and often asking whoever actually holds the RSI
+ * admin rights. A one-hour window expired on people who had pasted it correctly, which is the
+ * worst possible failure: the proof sits on the page and we tell them it's too late.
+ *
+ * A longer window costs little. The code is single-use, capped at ORG_VERIFY_MAX_ATTEMPTS
+ * checks, only usable by the org's presumed leader, and proves nothing except control of a
+ * page that same person already controls.
+ */
+export const ORG_CODE_TTL_MINUTES = 24 * 60;
 export const ORG_VERIFY_MAX_ATTEMPTS = 20;
 /** A proposal nobody votes on shouldn't sit open against the treasury forever. */
 export const PROPOSAL_TTL_HOURS = 168;
