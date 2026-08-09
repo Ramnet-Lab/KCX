@@ -628,10 +628,9 @@ async function toOrgDto(db: Db, r: OrgRow, viewerId: string | null, isAdmin = fa
 /**
  * Orgs this trader belongs to. Derived from RSI, so in practice exactly one.
  *
- * `adminOrgId` lets a site admin pull one org they are NOT a member of into their console —
- * the org they navigated to. Deliberately one org rather than "all of them": an admin needs
- * to reach any org, not to carry every org on the exchange around in their org picker, and
- * the directory is already the place that lists them all.
+ * An admin gets all of them: the console is where they look at the org system as a whole, and
+ * a picker listing only the orgs they happen to belong to would be the one view that cannot
+ * answer "what is going on with that org". `adminOrgId` remains for the non-admin path.
  */
 export async function listMyOrgs(
   db: Db,
@@ -639,11 +638,22 @@ export async function listMyOrgs(
   opts: { adminOrgId?: string | null; isAdmin?: boolean } = {},
 ): Promise<OrgDto[]> {
   const extra = opts.adminOrgId ?? null;
+  // An admin gets every org, because the console is their view of the whole org system
+  // rather than of their own membership. Everyone else gets the orgs they belong to, plus
+  // nothing — membership is derived from RSI and is not a thing the console can widen.
   const rows = await db.execute<OrgRow>(sql`
     ${ORG_SELECT(userId)}
-    WHERE EXISTS (SELECT 1 FROM org_members mm WHERE mm.org_id = o.id AND mm.user_id = ${userId}::uuid)
-       ${extra ? sql`OR o.id = ${extra}::uuid` : sql``}
-    ORDER BY o.name
+    ${
+      opts.isAdmin
+        ? sql``
+        : sql`WHERE EXISTS (SELECT 1 FROM org_members mm WHERE mm.org_id = o.id AND mm.user_id = ${userId}::uuid)
+              ${extra ? sql`OR o.id = ${extra}::uuid` : sql``}`
+    }
+    -- Their own orgs first, so an admin still lands on theirs rather than on whichever org
+    -- happens to sort first alphabetically.
+    ORDER BY EXISTS (
+      SELECT 1 FROM org_members mm WHERE mm.org_id = o.id AND mm.user_id = ${userId}::uuid
+    ) DESC, o.name
   `);
   return Promise.all(rows.rows.map((r) => toOrgDto(db, r, userId, opts.isAdmin === true)));
 }

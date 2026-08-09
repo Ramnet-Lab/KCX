@@ -25,8 +25,9 @@ import {
 import type { OrderDto } from "@kcx/shared";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { AdminActAs } from "@/components/admin-act-as";
 import { ManageDesk } from "@/components/manage-desk";
-import { currentUser } from "@/lib/session";
+import { actualUser, currentUser } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +44,9 @@ export const metadata: Metadata = { title: "My desk" };
 export default async function ManagePage() {
   const user = await currentUser();
   if (!user) redirect("/signin");
+  // The REAL account, so the switcher stays reachable while standing in as somebody — asking
+  // `user` would hide it the moment it was used.
+  const me = await actualUser();
 
   let listings: BazaarListingDto[] = [];
   let sales: BazaarSaleDto[] = [];
@@ -120,6 +124,8 @@ export default async function ManagePage() {
 
   return (
     <>
+      {me?.role === "admin" && <AdminActAs />}
+
       <div className="mb-4">
         <h1 className="text-lg font-bold text-ink">My desk</h1>
         <p className="text-xs text-ink-dim">

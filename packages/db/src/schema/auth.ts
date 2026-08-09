@@ -123,6 +123,9 @@ export const authEvents = pgTable(
         "password_set",
         "password_removed",
         "logout",
+        /** An admin stepped into, or back out of, another trader's account. */
+        "impersonation_started",
+        "impersonation_ended",
       ],
     }).notNull(),
     detail: text("detail"),

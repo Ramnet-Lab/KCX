@@ -54,6 +54,12 @@ export function OrgConsole({
   const router = useRouter();
 
   const org = orgs.find((o) => o.id === selectedId) ?? orgs[0] ?? null;
+
+  const [orgFilter, setOrgFilter] = useState("");
+  const q = orgFilter.trim().toLowerCase();
+  const shownOrgs = q
+    ? orgs.filter((o) => o.sid.toLowerCase().includes(q) || o.name.toLowerCase().includes(q))
+    : orgs;
   /*
    * One flag for "may work these controls": the org's proven leader, or a site admin.
    *
@@ -77,8 +83,8 @@ export function OrgConsole({
     { id: "overview", label: "Public view" },
     { id: "roster", label: "Roster", count: members.length },
     { id: "board", label: "Board", count: proposals.filter((p) => p.status === "open").length },
-    // Channels are the president's alone, so the tab isn't offered to anyone else. A tab
-    // that only ever explains why you can't use it is a worse answer than no tab.
+    // The president's, plus an admin reading over their shoulder. Not offered to anyone
+    // else: a tab that only ever explains why you can't use it is worse than no tab.
     ...(isPresident ? [{ id: "channels" as const, label: "Channels" }] : []),
     { id: "directory", label: "Other orgs" },
   ];
@@ -121,18 +127,38 @@ export function OrgConsole({
   return (
     <div>
       {orgs.length > 1 && (
-        <div className="mb-3 flex flex-wrap gap-1 text-xs">
-          {orgs.map((o) => (
-            <button
-              key={o.id}
-              onClick={() => router.push(`/orgs?id=${o.id}`)}
-              className={`tap rounded px-3 py-1.5 font-bold ${
-                org.id === o.id ? "bg-accent/15 text-accent" : "text-ink-faint hover:text-ink-dim"
-              }`}
-            >
-              {o.sid}
-            </button>
-          ))}
+        <div className="mb-3">
+          {/*
+            A filter appears once the list stops being scannable. An admin sees every org on
+            the exchange here, so the row of buttons that works for a trader's single org
+            becomes a wall — but adding a search box to someone with two orgs would be furniture.
+          */}
+          {orgs.length > 8 && (
+            <input
+              value={orgFilter}
+              onChange={(e) => setOrgFilter(e.target.value)}
+              placeholder={`Filter ${orgs.length} orgs by name or SID…`}
+              aria-label="Filter orgs"
+              className="mb-2 w-full rounded border border-line bg-bg px-2 py-1.5 text-xs text-ink placeholder:text-ink-faint focus:outline-none"
+            />
+          )}
+          <div className="flex max-h-32 flex-wrap gap-1 overflow-y-auto text-xs">
+            {shownOrgs.map((o) => (
+              <button
+                key={o.id}
+                onClick={() => router.push(`/orgs?id=${o.id}`)}
+                title={o.name}
+                className={`tap rounded px-3 py-1.5 font-bold ${
+                  org.id === o.id ? "bg-accent/15 text-accent" : "text-ink-faint hover:text-ink-dim"
+                }`}
+              >
+                {o.sid}
+              </button>
+            ))}
+            {shownOrgs.length === 0 && (
+              <span className="px-1 py-1.5 text-ink-faint">No org matches “{orgFilter}”.</span>
+            )}
+          </div>
         </div>
       )}
 

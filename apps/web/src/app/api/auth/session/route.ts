@@ -1,6 +1,6 @@
 import { getDb, unreadMessageCount } from "@kcx/db";
 import { NextResponse } from "next/server";
-import { currentUser, destroySession, devLoginEnabled, logAuthEvent } from "@/lib/session";
+import { currentUser, destroySession, devLoginEnabled, logAuthEvent, sessionContext } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
@@ -12,11 +12,15 @@ export const dynamic = "force-dynamic";
  * anyone their sign-in state — it degrades to zero.
  */
 export async function GET() {
-  const user = await currentUser();
+  const { user, actual, impersonating } = await sessionContext();
   const unreadMessages = user ? await unreadMessageCount(getDb(), user.id).catch(() => 0) : 0;
   return NextResponse.json({
     devLoginEnabled: devLoginEnabled(),
     unreadMessages,
+    // Rides along for the same reason the unread count does: the banner has to appear on
+    // every page, and this call already happens on every page.
+    impersonating,
+    actualHandle: impersonating ? (actual?.handle ?? null) : null,
     user: user
       ? {
           id: user.id,

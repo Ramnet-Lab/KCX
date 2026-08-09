@@ -51,9 +51,22 @@ export function DeskNavLink() {
   );
 }
 
-type SessionState = { user: SessionUser | null; devLoginEnabled: boolean; unreadMessages: number };
+type SessionState = {
+  user: SessionUser | null;
+  devLoginEnabled: boolean;
+  unreadMessages: number;
+  /** An admin is standing in as `user`; `actualHandle` is who they really are. */
+  impersonating: boolean;
+  actualHandle: string | null;
+};
 
-const SIGNED_OUT: SessionState = { user: null, devLoginEnabled: false, unreadMessages: 0 };
+const SIGNED_OUT: SessionState = {
+  user: null,
+  devLoginEnabled: false,
+  unreadMessages: 0,
+  impersonating: false,
+  actualHandle: null,
+};
 
 let cached: Promise<SessionState> | null = null;
 /**
@@ -72,6 +85,8 @@ function fetchSession(): Promise<SessionState> {
       user: (s?.user ?? null) as SessionUser | null,
       devLoginEnabled: !!s?.devLoginEnabled,
       unreadMessages: Number(s?.unreadMessages ?? 0),
+      impersonating: !!s?.impersonating,
+      actualHandle: (s?.actualHandle ?? null) as string | null,
     }))
     .catch(() => SIGNED_OUT);
   return cached;
@@ -105,6 +120,8 @@ export function useSession() {
   return {
     user: state.user,
     unreadMessages: state.unreadMessages,
+    impersonating: state.impersonating,
+    actualHandle: state.actualHandle,
     loaded,
     setUser: (user: SessionUser | null) => setState((s) => ({ ...s, user })),
     invalidate: () => {
@@ -193,5 +210,44 @@ export function SessionBar() {
         sign out
       </button>
     </span>
+  );
+}
+
+/**
+ * The standing-in banner.
+ *
+ * Deliberately loud, fixed, and on every page. An admin wearing somebody else's account sees
+ * a site that behaves normally in every respect — that is the whole point of the feature and
+ * also its only real hazard, because the next thing they do, they do as that person. The one
+ * thing that must never be subtle is the way out.
+ */
+export function ImpersonationBanner() {
+  const { impersonating, user, actualHandle } = useSession();
+  const [busy, setBusy] = useState(false);
+  if (!impersonating || !user) return null;
+
+  return (
+    <div className="sticky top-0 z-50 flex flex-wrap items-center justify-center gap-2 bg-danger/20 px-3 py-1.5 text-center text-[11px] text-ink">
+      <span>
+        Acting as <span className="font-bold">@{user.handle}</span>
+        {actualHandle && <span className="text-ink-dim"> — you are @{actualHandle}</span>}
+      </span>
+      <button
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await fetch("/api/admin/impersonate", { method: "DELETE" });
+            refreshSession();
+            window.location.reload();
+          } finally {
+            setBusy(false);
+          }
+        }}
+        disabled={busy}
+        className="tap rounded bg-danger/30 px-2 py-0.5 font-bold hover:bg-danger/40 disabled:opacity-40"
+      >
+        {busy ? "…" : "Stop"}
+      </button>
+    </div>
   );
 }

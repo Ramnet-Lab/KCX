@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { DeskNavLink, ModNavLink, SessionBar } from "@/components/session-bar";
+import { DeskNavLink, ImpersonationBanner, ModNavLink, SessionBar } from "@/components/session-bar";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -47,6 +47,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </nav>
           </div>
         </header>
+        <ImpersonationBanner />
         <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>
         <footer className="mt-12 border-t border-line bg-panel text-xs leading-relaxed text-ink-dim">
           <div className="mx-auto max-w-6xl space-y-2 px-4 py-6">

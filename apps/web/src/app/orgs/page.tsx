@@ -57,6 +57,7 @@ export default async function OrgsPage({
     // A no-op once it exists, so it costs one indexed read on every other visit.
     await backfillOrgMembership(db, user.id);
     // An admin reaching an org they don't belong to gets it pulled in alongside their own.
+    // Admins get every org; the console filters them client-side.
     const adminOpts = { adminOrgId: user.role === "admin" ? (id ?? null) : null, isAdmin: user.role === "admin" };
     orgs = await listMyOrgs(db, user.id, adminOpts);
     let selected = orgs.find((o) => o.id === id) ?? orgs[0];
