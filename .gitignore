@@ -19,6 +19,9 @@ tools/
 /AGENTS.md
 /CLAUDE.md
 *.local.md
+# Any throwaway probe/test script. These get written next to the code they exercise and
+# routinely hold a live connection string — this repo is public.
+*.local.*
 
 # Agent scratch. Local-only notes and plans that shouldn't reach the history.
 .claude/settings.local.json

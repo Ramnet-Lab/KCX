@@ -24,9 +24,17 @@ export function ModNavLink() {
   const { user, loaded } = useSession();
   if (!loaded || !user) return null;
   if (user.role !== "mod" && user.role !== "admin") return null;
+  // The link is named after the role holding it. Calling a moderator's link "Admin" invited
+  // exactly one misunderstanding — that the powers behind it are the same — and they are not:
+  // a mod clears reports and bans, an admin also stands in for people and works any org.
+  const isAdmin = user.role === "admin";
   return (
-    <Link href="/admin" className="font-bold text-danger hover:text-ink" title="Moderation">
-      Admin
+    <Link
+      href="/admin"
+      className="font-bold text-danger hover:text-ink"
+      title={isAdmin ? "Admin console" : "Moderation"}
+    >
+      {isAdmin ? "Admin" : "Mod"}
     </Link>
   );
 }
