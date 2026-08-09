@@ -64,14 +64,12 @@ export function OrgConsole({
   const isPresident = org?.canAdminister === true;
   /** True only when they are NOT the org's own leader, i.e. acting as staff. */
   const actingAsAdmin = isPresident && org?.myRole !== "president";
-  /*
-   * Channels stay with the ACTUAL president, admin or not.
+  /**
+   * Speaking for the org in its channels stays with the ACTUAL president.
    *
-   * A channel is private correspondence between two orgs, and the org on the other end never
-   * agreed to a third reader. Standing in to fix an org's roster is a different thing from
-   * reading its diplomacy, so this one keeps the narrower test — and the endpoints behind the
-   * tab resolve "which side am I" through presidency, so offering it to an admin would render
-   * an empty panel anyway.
+   * An admin reads them — developer visibility over the feature — but does not post: a
+   * message from an admin would reach the counterparty indistinguishable from the org's own
+   * word, and reading correspondence and putting words into it are not the same power.
    */
   const isRealPresident = org?.myRole === "president";
 
@@ -81,7 +79,7 @@ export function OrgConsole({
     { id: "board", label: "Board", count: proposals.filter((p) => p.status === "open").length },
     // Channels are the president's alone, so the tab isn't offered to anyone else. A tab
     // that only ever explains why you can't use it is a worse answer than no tab.
-    ...(isRealPresident ? [{ id: "channels" as const, label: "Channels" }] : []),
+    ...(isPresident ? [{ id: "channels" as const, label: "Channels" }] : []),
     { id: "directory", label: "Other orgs" },
   ];
 
@@ -282,7 +280,7 @@ export function OrgConsole({
 
       {tab === "channels" &&
         (org.canTrade ? (
-          <OrgChannelPanel orgId={org.id} openChannelId={openChannelId} />
+          <OrgChannelPanel orgId={org.id} openChannelId={openChannelId} readOnly={!isRealPresident} />
         ) : (
           <p className="rounded border border-dashed border-line p-6 text-center text-xs text-ink-faint">
             Prove this org&apos;s leadership first — the other end needs somebody who can speak for

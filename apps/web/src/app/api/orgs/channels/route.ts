@@ -14,9 +14,11 @@ export async function GET(request: Request) {
 
   try {
     const db = getDb();
-    const org = await getOrg(db, orgId, user.id);
-    // Not a 403: whether an org has correspondence at all is itself private.
-    if (!org || org.charterHolderId !== user.id) {
+    const org = await getOrg(db, orgId, user.id, user.role);
+    // Not a 403: whether an org has correspondence at all is itself private. A site admin
+    // reads any org's, which is developer visibility over the feature rather than a party
+    // to it — they still cannot post, so the org remains the only voice in its own channel.
+    if (!org || !(org.charterHolderId === user.id || user.role === "admin")) {
       return NextResponse.json({ channels: [] }, { status: 404 });
     }
     return NextResponse.json({ channels: await listOrgChannels(db, orgId) });

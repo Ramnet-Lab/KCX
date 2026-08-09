@@ -18,7 +18,16 @@ const MESSAGE_MAX = 4000;
  * org to things before any contract exists, and "who may say we'll do that" needs one
  * answer rather than a committee.
  */
-export function OrgChannelPanel({ orgId, openChannelId }: { orgId: string; openChannelId?: string | null }) {
+export function OrgChannelPanel({
+  orgId,
+  openChannelId,
+  readOnly = false,
+}: {
+  orgId: string;
+  openChannelId?: string | null;
+  /** A site admin looking in. They can read the correspondence but not speak for the org. */
+  readOnly?: boolean;
+}) {
   const [channels, setChannels] = useState<OrgChannelDto[] | null>(null);
   const [selected, setSelected] = useState<string | null>(openChannelId ?? null);
   const [thread, setThread] = useState<OrgChannelDto | null>(null);
@@ -39,9 +48,9 @@ export function OrgChannelPanel({ orgId, openChannelId }: { orgId: string; openC
 
   const loadThread = useCallback(async () => {
     if (!selected) return;
-    const res = await fetch(`/api/orgs/channels/${selected}`, { cache: "no-store" });
+    const res = await fetch(`/api/orgs/channels/${selected}?orgId=${orgId}`, { cache: "no-store" });
     setThread(res.ok ? ((await res.json()).channel ?? null) : null);
-  }, [selected]);
+  }, [selected, orgId]);
 
   useEffect(() => {
     void loadThread();
@@ -157,27 +166,40 @@ export function OrgChannelPanel({ orgId, openChannelId }: { orgId: string; openC
 
                 {error && <p className="mt-2 text-[11px] text-danger">{error}</p>}
 
-                <textarea
-                  value={body}
-                  onChange={(e) => setBody(e.target.value)}
-                  rows={2}
-                  maxLength={MESSAGE_MAX}
-                  placeholder="Speaking for your org…"
-                  aria-label="Message"
-                  className="mt-2 w-full rounded border border-line bg-bg px-2 py-1.5 text-xs text-ink placeholder:text-ink-faint focus:outline-none"
-                />
-                <button
-                  onClick={send}
-                  disabled={busy || !body.trim()}
-                  className="tap mt-1 rounded bg-accent/20 px-3 py-1 text-xs font-bold text-accent hover:bg-accent/30 disabled:opacity-40"
-                >
-                  {busy ? "…" : "Send"}
-                </button>
-                <p className="mt-1 text-[11px] text-ink-faint">
-                  Private between the two presidents. Your name is recorded on each message — an
-                  org can&apos;t type, and &quot;who said this on our behalf&quot; is the first question when a
-                  deal goes wrong.
-                </p>
+                {readOnly ? (
+                  /*
+                    No composer for an admin. Reading the correspondence is oversight; posting
+                    into it would put words in the org's mouth that its counterparty would read
+                    as the org's own, which is the one thing this panel must never allow.
+                  */
+                  <p className="mt-2 rounded border border-line bg-panel-2 px-2 py-1.5 text-[11px] text-ink-faint">
+                    Reading as admin. Only the org&apos;s president can post here.
+                  </p>
+                ) : (
+                  <>
+                    <textarea
+                      value={body}
+                      onChange={(e) => setBody(e.target.value)}
+                      rows={2}
+                      maxLength={MESSAGE_MAX}
+                      placeholder="Speaking for your org…"
+                      aria-label="Message"
+                      className="mt-2 w-full rounded border border-line bg-bg px-2 py-1.5 text-xs text-ink placeholder:text-ink-faint focus:outline-none"
+                    />
+                    <button
+                      onClick={send}
+                      disabled={busy || !body.trim()}
+                      className="tap mt-1 rounded bg-accent/20 px-3 py-1 text-xs font-bold text-accent hover:bg-accent/30 disabled:opacity-40"
+                    >
+                      {busy ? "…" : "Send"}
+                    </button>
+                    <p className="mt-1 text-[11px] text-ink-faint">
+                      Private between the two presidents. Your name is recorded on each message — an
+                      org can&apos;t type, and &quot;who said this on our behalf&quot; is the first question when a
+                      deal goes wrong.
+                    </p>
+                  </>
+                )}
               </>
             )}
           </div>

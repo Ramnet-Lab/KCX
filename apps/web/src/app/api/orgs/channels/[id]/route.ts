@@ -18,7 +18,14 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   if (!user) return NextResponse.json({ error: "Sign in first" }, { status: 401 });
 
   try {
-    const channel = await getOrgChannel(getDb(), id, user.id);
+    // ?orgId= names which side a site admin is reading from; ignored for everyone else.
+    const from = new URL(_request.url).searchParams.get("orgId");
+    const channel = await getOrgChannel(
+      getDb(),
+      id,
+      user.id,
+      user.role === "admin" ? from : null,
+    );
     if (!channel) return NextResponse.json({ error: "Not found" }, { status: 404 });
     return NextResponse.json({ channel });
   } catch (err) {

@@ -1555,16 +1555,31 @@ export async function getOrgChannel(
   db: Db,
   channelId: string,
   userId: string,
+  /**
+   * A site admin reading, and which side they are reading from.
+   *
+   * The side has to be named rather than guessed: an admin is president of neither org, and
+   * defaulting to whichever came first would label half the messages as theirs and mark the
+   * wrong org's correspondence read. Read-only — posting still resolves through presidency,
+   * so nothing an admin does here can be mistaken for the org speaking.
+   */
+  adminViewOrgId?: string | null,
 ): Promise<OrgChannelDto | null> {
   const rows = await db.execute<ChannelRow>(sql`${CHANNEL_SELECT} WHERE c.id = ${channelId}::uuid LIMIT 1`);
   const row = rows.rows[0];
   if (!row) return null;
 
-  const myOrgId = (await isOrgPresident(db, row.org_a_id, userId))
-    ? row.org_a_id
-    : (await isOrgPresident(db, row.org_b_id, userId))
-      ? row.org_b_id
+  const adminSide =
+    adminViewOrgId && (adminViewOrgId === row.org_a_id || adminViewOrgId === row.org_b_id)
+      ? adminViewOrgId
       : null;
+  const myOrgId =
+    adminSide ??
+    ((await isOrgPresident(db, row.org_a_id, userId))
+      ? row.org_a_id
+      : (await isOrgPresident(db, row.org_b_id, userId))
+        ? row.org_b_id
+        : null);
   if (!myOrgId) return null;
 
   const messages = await db.execute<{
