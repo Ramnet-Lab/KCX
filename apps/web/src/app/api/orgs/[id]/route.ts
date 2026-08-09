@@ -26,7 +26,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const user = await currentUser();
   try {
     const db = getDb();
-    const org = await getOrg(db, id, user?.id ?? null);
+    const org = await getOrg(db, id, user?.id ?? null, user?.role ?? null);
     if (!org) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     const isMember = org.myRole != null;
@@ -85,6 +85,14 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const input = parsed.data;
   const db = getDb();
   const isMod = user.role === "mod" || user.role === "admin";
+  /*
+   * Admins work an org's own controls as its leader would.
+   *
+   * Kept distinct from `isMod`: a moderator suspends and reassigns from the outside, which is
+   * a judgement about the org. This is standing IN for its president, so it is the narrower
+   * role that gets it. Every call below records `asAdmin` on the event it writes.
+   */
+  const asAdmin = user.role === "admin";
 
   try {
     switch (input.action) {
@@ -98,7 +106,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       }
 
       case "claim_check": {
-        const org = await getOrg(db, id, user.id);
+        const org = await getOrg(db, id, user.id, user.role);
         if (!org) return NextResponse.json({ error: "Not found" }, { status: 404 });
         const outcome = await checkOrgClaim(id, org.sid);
         if (!outcome.ok) return NextResponse.json({ error: outcome.message }, { status: 409 });
@@ -106,7 +114,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       }
 
       case "transfer": {
-        const result = await transferOrgLeadership(db, { orgId: id, actorId: user.id, toUserId: input.userId });
+        const result = await transferOrgLeadership(db, { orgId: id, actorId: user.id, toUserId: input.userId, asAdmin });
         if (!result.ok) return NextResponse.json({ error: result.error }, { status: 409 });
         return NextResponse.json({ ok: true });
       }
@@ -119,6 +127,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
           role: input.role,
           isBoardMember: input.isBoardMember,
           spendLimit: input.spendLimit,
+          asAdmin,
         });
         if (!result.ok) return NextResponse.json({ error: result.error }, { status: 409 });
         return NextResponse.json({ ok: true });
@@ -130,13 +139,14 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
           actorId: user.id,
           threshold: input.threshold,
           minValue: input.minValue,
+          asAdmin,
         });
         if (!result.ok) return NextResponse.json({ error: result.error }, { status: 409 });
         return NextResponse.json({ ok: true });
       }
 
       case "set_treasury": {
-        const result = await setOrgTreasury(db, { orgId: id, actorId: user.id, treasury: input.treasury });
+        const result = await setOrgTreasury(db, { orgId: id, actorId: user.id, treasury: input.treasury, asAdmin });
         if (!result.ok) return NextResponse.json({ error: result.error }, { status: 409 });
         return NextResponse.json({ ok: true });
       }

@@ -56,13 +56,15 @@ export default async function OrgsPage({
     // Accounts verified before orgs were derived have a main_org_sid and no membership row.
     // A no-op once it exists, so it costs one indexed read on every other visit.
     await backfillOrgMembership(db, user.id);
-    orgs = await listMyOrgs(db, user.id);
+    // An admin reaching an org they don't belong to gets it pulled in alongside their own.
+    const adminOpts = { adminOrgId: user.role === "admin" ? (id ?? null) : null, isAdmin: user.role === "admin" };
+    orgs = await listMyOrgs(db, user.id, adminOpts);
     let selected = orgs.find((o) => o.id === id) ?? orgs[0];
     // Same lazy fill as the public page: only for the org actually being looked at, never
     // in a loop over the directory.
     if (selected) {
       await refreshOrgPublicProfile(selected.id, selected.sid).catch(() => {});
-      orgs = await listMyOrgs(db, user.id);
+      orgs = await listMyOrgs(db, user.id, adminOpts);
       selected = orgs.find((o) => o.id === id) ?? orgs[0];
     }
 

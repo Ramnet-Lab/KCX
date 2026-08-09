@@ -54,7 +54,26 @@ export function OrgConsole({
   const router = useRouter();
 
   const org = orgs.find((o) => o.id === selectedId) ?? orgs[0] ?? null;
-  const isPresident = org?.myRole === "president";
+  /*
+   * One flag for "may work these controls": the org's proven leader, or a site admin.
+   *
+   * Computed server-side and handed down rather than re-derived from myRole here — an admin
+   * standing in for a president is not a member and has no role, so a role test would show
+   * them a read-only page whose every button the API would in fact have accepted.
+   */
+  const isPresident = org?.canAdminister === true;
+  /** True only when they are NOT the org's own leader, i.e. acting as staff. */
+  const actingAsAdmin = isPresident && org?.myRole !== "president";
+  /*
+   * Channels stay with the ACTUAL president, admin or not.
+   *
+   * A channel is private correspondence between two orgs, and the org on the other end never
+   * agreed to a third reader. Standing in to fix an org's roster is a different thing from
+   * reading its diplomacy, so this one keeps the narrower test — and the endpoints behind the
+   * tab resolve "which side am I" through presidency, so offering it to an admin would render
+   * an empty panel anyway.
+   */
+  const isRealPresident = org?.myRole === "president";
 
   const TABS: { id: Tab; label: string; count?: number }[] = [
     { id: "overview", label: "Public view" },
@@ -62,7 +81,7 @@ export function OrgConsole({
     { id: "board", label: "Board", count: proposals.filter((p) => p.status === "open").length },
     // Channels are the president's alone, so the tab isn't offered to anyone else. A tab
     // that only ever explains why you can't use it is a worse answer than no tab.
-    ...(isPresident ? [{ id: "channels" as const, label: "Channels" }] : []),
+    ...(isRealPresident ? [{ id: "channels" as const, label: "Channels" }] : []),
     { id: "directory", label: "Other orgs" },
   ];
 
@@ -144,11 +163,20 @@ export function OrgConsole({
               <StatusBadge status={org.status} />
             </div>
             <div className="text-xs text-ink-faint">
-              {org.memberCount} member{org.memberCount === 1 ? "" : "s"} on KCX · you are {org.myRole}
+              {org.memberCount} member{org.memberCount === 1 ? "" : "s"} on KCX
+              {org.myRole ? ` · you are ${org.myRole}` : " · you are not a member"}
               {org.myRankStars != null && ` (${"★".repeat(org.myRankStars)}${"☆".repeat(5 - org.myRankStars)})`}
             </div>
           </div>
         </div>
+
+        {actingAsAdmin && (
+          <div className="mt-3 rounded border border-accent/40 bg-accent/5 px-3 py-2 text-[11px] text-ink-dim">
+            <span className="font-bold text-accent">Acting as staff.</span> You are working this
+            org&apos;s controls as an admin, not as its leader. Everything you change here is
+            recorded against your account in the org&apos;s history.
+          </div>
+        )}
 
         {org.status !== "verified" && (
           <ClaimPanel

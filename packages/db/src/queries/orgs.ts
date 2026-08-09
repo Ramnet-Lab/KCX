@@ -74,6 +74,13 @@ export type OrgDto = {
   amBoardMember: boolean;
   /** True when the viewer is the highest-ranked member and nobody has verified yet. */
   amPresumedLeader: boolean;
+  /**
+   * The viewer may work this org's controls: its proven leader, or a site admin.
+   *
+   * Computed here rather than re-derived in the UI so there is exactly one answer to "may
+   * this person act for the org", and the console can't drift from what the API enforces.
+   */
+  canAdminister: boolean;
   canTrade: boolean;
   verifiedAt: string | null;
   createdAt: string;
@@ -588,7 +595,7 @@ type OrgRow = {
   spend_limit: string | null; is_board_member: boolean | null;
 };
 
-async function toOrgDto(db: Db, r: OrgRow, viewerId: string | null): Promise<OrgDto> {
+async function toOrgDto(db: Db, r: OrgRow, viewerId: string | null, isAdmin = false): Promise<OrgDto> {
   // Only computed while nothing is proven. Once there is a charter holder the star ranking
   // decides nothing, and asking anyway would be a query per org for an answer nobody uses.
   const presumed = viewerId && r.status !== "verified" ? await presumedLeader(db, r.id) : null;
@@ -611,32 +618,56 @@ async function toOrgDto(db: Db, r: OrgRow, viewerId: string | null): Promise<Org
     mySpendLimit: r.spend_limit != null ? Number(r.spend_limit) : null,
     amBoardMember: r.is_board_member === true,
     amPresumedLeader: presumed != null && presumed === viewerId,
+    canAdminister: isAdmin || (viewerId != null && r.charter_holder_id === viewerId),
     canTrade: r.status === "verified",
     verifiedAt: r.verified_at ? new Date(r.verified_at).toISOString() : null,
     createdAt: new Date(r.created_at).toISOString(),
   };
 }
 
-/** Orgs this trader belongs to. Derived from RSI, so in practice exactly one. */
-export async function listMyOrgs(db: Db, userId: string): Promise<OrgDto[]> {
+/**
+ * Orgs this trader belongs to. Derived from RSI, so in practice exactly one.
+ *
+ * `adminOrgId` lets a site admin pull one org they are NOT a member of into their console —
+ * the org they navigated to. Deliberately one org rather than "all of them": an admin needs
+ * to reach any org, not to carry every org on the exchange around in their org picker, and
+ * the directory is already the place that lists them all.
+ */
+export async function listMyOrgs(
+  db: Db,
+  userId: string,
+  opts: { adminOrgId?: string | null; isAdmin?: boolean } = {},
+): Promise<OrgDto[]> {
+  const extra = opts.adminOrgId ?? null;
   const rows = await db.execute<OrgRow>(sql`
     ${ORG_SELECT(userId)}
     WHERE EXISTS (SELECT 1 FROM org_members mm WHERE mm.org_id = o.id AND mm.user_id = ${userId}::uuid)
+       ${extra ? sql`OR o.id = ${extra}::uuid` : sql``}
     ORDER BY o.name
   `);
-  return Promise.all(rows.rows.map((r) => toOrgDto(db, r, userId)));
+  return Promise.all(rows.rows.map((r) => toOrgDto(db, r, userId, opts.isAdmin === true)));
 }
 
-export async function getOrg(db: Db, orgId: string, viewerId?: string | null): Promise<OrgDto | null> {
+export async function getOrg(
+  db: Db,
+  orgId: string,
+  viewerId?: string | null,
+  viewerRole?: string | null,
+): Promise<OrgDto | null> {
   const rows = await db.execute<OrgRow>(sql`${ORG_SELECT(viewerId ?? null)} WHERE o.id = ${orgId}::uuid`);
   const r = rows.rows[0];
-  return r ? toOrgDto(db, r, viewerId ?? null) : null;
+  return r ? toOrgDto(db, r, viewerId ?? null, viewerRole === "admin") : null;
 }
 
-export async function getOrgBySid(db: Db, sid: string, viewerId?: string | null): Promise<OrgDto | null> {
+export async function getOrgBySid(
+  db: Db,
+  sid: string,
+  viewerId?: string | null,
+  viewerRole?: string | null,
+): Promise<OrgDto | null> {
   const rows = await db.execute<OrgRow>(sql`${ORG_SELECT(viewerId ?? null)} WHERE o.sid = ${sid.toUpperCase()}`);
   const r = rows.rows[0];
-  return r ? toOrgDto(db, r, viewerId ?? null) : null;
+  return r ? toOrgDto(db, r, viewerId ?? null, viewerRole === "admin") : null;
 }
 
 /** Roster, ordered as the org itself ranks people, with each member's committed slice. */
@@ -686,13 +717,27 @@ export async function listOrgMembers(db: Db, orgId: string): Promise<OrgMemberDt
 
 /* --------------------------- The president's controls ----------------------- */
 
+/**
+ * The gate on every control that belongs to the org's leader.
+ *
+ * A site admin passes it. Support work is the whole reason the role exists — a compromised
+ * president, a treasury typed with an extra zero, an org whose leader has left the game — and
+ * the alternative to an admin fixing those in place is an admin editing the database by hand,
+ * which leaves no trace in `org_events` at all. Every caller stamps `asAdmin` into the event
+ * it writes, so the append-only log distinguishes the org acting from us acting on it.
+ *
+ * Suspension is bypassed for admins for the same reason: a suspended org is precisely the one
+ * most likely to need a moderator's hands on it before it can be reinstated.
+ */
 async function requirePresident(
   tx: Db,
   orgId: string,
   userId: string,
+  asAdmin = false,
 ): Promise<{ error: string } | { org: typeof orgs.$inferSelect }> {
   const [org] = await tx.select().from(orgs).where(eq(orgs.id, orgId));
   if (!org) return { error: "Org not found" };
+  if (asAdmin) return { org };
   if (org.status === "suspended") return { error: "This org is suspended." };
   if (org.charterHolderId !== userId) return { error: "Only the org's verified leader can do that." };
   return { org };
@@ -714,10 +759,12 @@ export async function setOrgMemberRole(
     role?: OrgRole;
     isBoardMember?: boolean;
     spendLimit?: number | null;
+    /** Site admin acting in the leader's place. */
+    asAdmin?: boolean;
   },
 ): Promise<OrgResult> {
   return db.transaction(async (tx) => {
-    const guard = await requirePresident(tx as unknown as Db, opts.orgId, opts.actorId);
+    const guard = await requirePresident(tx as unknown as Db, opts.orgId, opts.actorId, opts.asAdmin);
     if ("error" in guard) return { ok: false as const, error: guard.error };
     if (opts.role === "president") {
       return { ok: false as const, error: "There is one president — use transfer leadership." };
@@ -767,7 +814,12 @@ export async function setOrgMemberRole(
           : opts.isBoardMember !== undefined && opts.isBoardMember !== member.isBoardMember
             ? "board_changed"
             : "limit_changed",
-      data: { role: opts.role ?? member.role, board: opts.isBoardMember, spendLimit: opts.spendLimit },
+      data: {
+        role: opts.role ?? member.role,
+        board: opts.isBoardMember,
+        spendLimit: opts.spendLimit,
+        ...(opts.asAdmin ? { asAdmin: true } : {}),
+      },
     });
     return { ok: true as const, orgId: opts.orgId };
   });
@@ -776,10 +828,10 @@ export async function setOrgMemberRole(
 /** Board rules. Copied onto each proposal at creation, so changing them never retunes a live vote. */
 export async function setOrgBoardRules(
   db: Db,
-  opts: { orgId: string; actorId: string; threshold: number; minValue: number },
+  opts: { orgId: string; actorId: string; threshold: number; minValue: number; asAdmin?: boolean },
 ): Promise<OrgResult> {
   return db.transaction(async (tx) => {
-    const guard = await requirePresident(tx as unknown as Db, opts.orgId, opts.actorId);
+    const guard = await requirePresident(tx as unknown as Db, opts.orgId, opts.actorId, opts.asAdmin);
     if ("error" in guard) return { ok: false as const, error: guard.error };
     if (opts.threshold < 0 || opts.threshold > 10) return { ok: false as const, error: "Threshold is 0–10." };
     if (opts.minValue < 0) return { ok: false as const, error: "Minimum can't be negative." };
@@ -792,7 +844,7 @@ export async function setOrgBoardRules(
       orgId: opts.orgId,
       actorId: opts.actorId,
       type: "board_changed",
-      data: { threshold: opts.threshold, minValue: opts.minValue },
+      data: { threshold: opts.threshold, minValue: opts.minValue, ...(opts.asAdmin ? { asAdmin: true } : {}) },
     });
     return { ok: true as const, orgId: opts.orgId };
   });
@@ -801,10 +853,10 @@ export async function setOrgBoardRules(
 /** Update the declared treasury. Never below what the org has already promised. */
 export async function setOrgTreasury(
   db: Db,
-  opts: { orgId: string; actorId: string; treasury: number },
+  opts: { orgId: string; actorId: string; treasury: number; asAdmin?: boolean },
 ): Promise<OrgResult> {
   return db.transaction(async (tx) => {
-    const guard = await requirePresident(tx as unknown as Db, opts.orgId, opts.actorId);
+    const guard = await requirePresident(tx as unknown as Db, opts.orgId, opts.actorId, opts.asAdmin);
     if ("error" in guard) return { ok: false as const, error: guard.error };
     if (opts.treasury < 0) return { ok: false as const, error: "A treasury can't be negative" };
 
@@ -822,7 +874,7 @@ export async function setOrgTreasury(
       orgId: opts.orgId,
       actorId: opts.actorId,
       type: "treasury_set",
-      data: { treasury: opts.treasury },
+      data: { treasury: opts.treasury, ...(opts.asAdmin ? { asAdmin: true } : {}) },
     });
     return { ok: true as const, orgId: opts.orgId };
   });
@@ -837,12 +889,15 @@ export async function setOrgTreasury(
  */
 export async function transferOrgLeadership(
   db: Db,
-  opts: { orgId: string; actorId: string; toUserId: string },
+  opts: { orgId: string; actorId: string; toUserId: string; asAdmin?: boolean },
 ): Promise<OrgResult> {
   return db.transaction(async (tx) => {
-    const guard = await requirePresident(tx as unknown as Db, opts.orgId, opts.actorId);
+    const guard = await requirePresident(tx as unknown as Db, opts.orgId, opts.actorId, opts.asAdmin);
     if ("error" in guard) return { ok: false as const, error: guard.error };
-    if (opts.toUserId === opts.actorId) return { ok: false as const, error: "You already lead this org." };
+    // The outgoing leader is the org's, not the caller's — an admin handing the org to
+    // someone else must demote the sitting president, not themselves.
+    const outgoing = guard.org.charterHolderId ?? opts.actorId;
+    if (opts.toUserId === outgoing) return { ok: false as const, error: "They already lead this org." };
 
     const [target] = await tx
       .select()
@@ -854,7 +909,7 @@ export async function transferOrgLeadership(
     await tx
       .update(orgMembers)
       .set({ role: "member" })
-      .where(and(eq(orgMembers.orgId, opts.orgId), eq(orgMembers.userId, opts.actorId)));
+      .where(and(eq(orgMembers.orgId, opts.orgId), eq(orgMembers.userId, outgoing)));
     await tx
       .update(orgMembers)
       .set({ role: "president", isBoardMember: true, spendLimit: null })
@@ -865,7 +920,7 @@ export async function transferOrgLeadership(
       actorId: opts.actorId,
       subjectId: opts.toUserId,
       type: "leadership_transferred",
-      data: {},
+      data: { ...(opts.asAdmin ? { asAdmin: true } : {}) },
     });
     return { ok: true as const, orgId: opts.orgId };
   });
@@ -1139,7 +1194,7 @@ export async function settleOrgProposal(
 /** The president may pull a proposal, but may never carry one alone. */
 export async function cancelOrgProposal(
   db: Db,
-  opts: { proposalId: string; userId: string },
+  opts: { proposalId: string; userId: string; asAdmin?: boolean },
 ): Promise<OrgResult> {
   return db.transaction(async (tx) => {
     const [p] = await tx.select().from(orgProposals).where(eq(orgProposals.id, opts.proposalId)).for("update");
@@ -1148,7 +1203,7 @@ export async function cancelOrgProposal(
 
     const [org] = await tx.select().from(orgs).where(eq(orgs.id, p.orgId));
     const isPresident = org?.charterHolderId === opts.userId;
-    if (!isPresident && p.proposedById !== opts.userId) {
+    if (!isPresident && !opts.asAdmin && p.proposedById !== opts.userId) {
       return { ok: false as const, error: "Only the proposer or the president can withdraw it." };
     }
 
@@ -1157,7 +1212,7 @@ export async function cancelOrgProposal(
       orgId: p.orgId,
       actorId: opts.userId,
       type: "proposal_rejected",
-      data: { proposalId: p.id, withdrawn: true },
+      data: { proposalId: p.id, withdrawn: true, ...(opts.asAdmin ? { asAdmin: true } : {}) },
     });
     return { ok: true as const, orgId: p.orgId };
   });

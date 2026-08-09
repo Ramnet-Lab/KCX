@@ -8,6 +8,7 @@ import {
   type ServiceContractDto,
 } from "@kcx/db";
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { OrgContactButton } from "@/components/org-contact";
 import { refreshOrgPublicProfile } from "@/lib/org-verify";
@@ -74,7 +75,19 @@ export default async function OrgPage({ params }: { params: Promise<{ sid: strin
     <OrgPublicProfile
       data={{ org, standing, listings, contracts }}
       contactSlot={
-        <OrgContactButton targetOrgId={org.id} targetSid={org.sid} verified={org.status === "verified"} />
+        <div className="flex flex-col items-end gap-1">
+          <OrgContactButton targetOrgId={org.id} targetSid={org.sid} verified={org.status === "verified"} />
+          {/*
+            The admin's way in. Every org has a public page, so this is the one link that
+            reaches ANY org's console — including the ones an admin has no membership of,
+            which is every org they are likely to be asked to fix.
+          */}
+          {user?.role === "admin" && (
+            <Link href={`/orgs?id=${org.id}`} className="text-[11px] text-ink-faint hover:text-accent">
+              Manage as admin →
+            </Link>
+          )}
+        </div>
       }
     />
   );
